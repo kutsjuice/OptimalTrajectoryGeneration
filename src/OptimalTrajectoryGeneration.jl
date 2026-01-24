@@ -2,6 +2,7 @@ module OptimalTrajectoryGeneration
 
 using LinearAlgebra
 using StaticArrays
+using ForwardDiff
 
 export
     AbstractRobotManipulator,
@@ -79,6 +80,22 @@ struct TrajectoryResult
     feasible::Bool
 end
 
+struct DHLink
+    a::Float64
+    alpha::Float64
+    d::Float64
+    theta::Float64
+end
+
+function dh_transform(theta::Float64, d::Float64, a::Float64, alpha::Float64)::Matrix{Float64}
+    return [
+        cos(theta) -sin(theta)*cos(alpha)  sin(theta)*sin(alpha) a*cos(theta);
+        sin(theta)  cos(theta)*cos(alpha) -cos(theta)*sin(alpha) a*sin(theta);
+        0           sin(alpha)             cos(alpha)            d;
+        0           0                      0                     1
+    ]
+    
+end
 """
 Compute forward kinematics mapping joint positions to end-effector pose.
 
@@ -99,6 +116,13 @@ function forward_kinematics(
     tolerance::Float64=1e-6,
     max_iterations::Int=100)::Vector{Float64}
     error("forward_kinematics not implemented for robot type $(typeof(robot))")
+
+    T = Matrix{Float64}(I, 4, 4)
+    for i in eachindex(joint_positions)
+        T *= dh_transform(joint_positions[i], robot.dh_params[i])
+    end
+    pos = T[1:3, 4] # [x, y, z]
+    return pos
 end
 
 """
