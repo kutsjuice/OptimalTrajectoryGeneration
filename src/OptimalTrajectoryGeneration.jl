@@ -6,18 +6,22 @@ using ForwardDiff
 
 export
     AbstractRobotManipulator,
-    AbstractJointPath,
-    AbstractCartesianPath,
-    
+    AbstractLink,
+
+    DHLink,
+    DHRobotManipulator,
+
     TrajectoryConstraints,
     JointTrajectory,
     TrajectoryResult,
 
     forward_kinematics,
-    inverse_kinematics,
     jacobian,
+    inverse_kinematics,
     compute_mass_and_force_terms,
-    
+
+    AbstractCartesianPath,
+    AbstractJointPath,
     evaluate_path,
     compute_limit_path_speed,
     generate_joint_trajectory
@@ -122,32 +126,34 @@ struct TrajectoryResult
 end
 
 """
-Compute forward kinematics mapping joint positions to end-effector pose.
+Compute forward kinematics (end-effector position).
 
-# Arguments
-- `robot::AbstractRobotManipulator`: Robot instance
-- `joint_positions::Vector{Float64}`: Joint positions
-- `initial_guess::Vector{Float64}`: Initial pose guess
-- `tolerance::Float64=1e-6`: Solution tolerance
-- `max_iterations::Int=100`: Maximum iterations
-
-# Returns
-- `Vector{Float64}`: Cartesian pose [x, y, z, ...]
+Contract: must be implemented for each concrete manipulator.
 """
 function forward_kinematics(
-    robot::AbstractRobotManipulator, 
-    joint_positions::Vector{Float64}, 
-    initial_guess::Vector{Float64}=zeros(length(joint_positions));
-    tolerance::Float64=1e-6,
-    max_iterations::Int=100)::Vector{Float64}
-    error("forward_kinematics not implemented for robot type $(typeof(robot))")
+    robot::AbstractRobotManipulator,
+    joint_positions::Vector{Float64}
+)::Vector{Float64}
+    error("forward_kinematics not implemented for $(typeof(robot))")
+end
 
-    T = Matrix{Float64}(I, 4, 4)
-    for i in eachindex(joint_positions)
-        T *= dh_transform(joint_positions[i], robot.dh_params[i])
+"""
+Forward kinematics for serial DH manipulator.
+"""
+function forward_kinematics(
+    robot::DHRobotManipulator,
+    joint_positions::Vector{Float64}
+)::Vector{Float64}
+
+    @assert length(joint_positions) == length(robot.dh_params)
+
+    T = @SMatrix eye(4)
+
+    for (q, link) in zip(joint_positions, robot.dh_params)
+        T *= local_transform(q, link)
     end
-    pos = T[1:3, 4] # [x, y, z]
-    return pos
+
+    return Vector(T[1:3, 4])   # [x, y, z]
 end
 
 """
@@ -166,11 +172,22 @@ Compute inverse kinematics mapping end-effector pose to joint positions.
 function inverse_kinematics(
     robot::AbstractRobotManipulator,
     target_pose::Vector{Float64},
-    initial_guess::Vector{Float64}=zeros(length(joint_positions));
-    tolerance::Float64=1e-6,
-    max_iterations::Int=100
+    initial_guess::Vector{Float64};
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
 )::Vector{Float64}
-    error("inverse_kinematics not implemented for robot type $(typeof(robot))")
+
+    q = copy(initial_guess)
+
+    for _ in 1:max_iterations
+        r = forward_kinematics(robot, q) - target_pose
+        norm(r) < tolerance && return q
+
+        J = jacobian(robot, q)
+        q -= J \ r
+    end
+
+    error("Inverse kinematics did not converge")
 end
 
 """
@@ -183,8 +200,13 @@ Compute manipulator Jacobian matrix.
 # Returns
 - `Matrix{Float64}`: Jacobian matrix
 """
-function jacobian(robot::AbstractRobotManipulator, joint_positions::Vector{Float64})::Matrix{Float64}
-    error("jacobian not implemented for robot type $(typeof(robot))")
+function jacobian(
+    robot::AbstractRobotManipulator,
+    joint_positions::Vector{Float64}
+)::Matrix{Float64}
+
+    f(q) = forward_kinematics(robot, q)
+    return ForwardDiff.jacobian(f, joint_positions)
 end
 
 """
