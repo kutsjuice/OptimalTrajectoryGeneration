@@ -29,6 +29,49 @@ Users should create concrete subtypes for their specific robots.
 abstract type AbstractRobotManipulator end
 
 """
+Abstract type representing a manipulator link.
+"""
+abstract type AbstractLink end
+
+"""
+Struct representing a DH  link.
+"""
+struct DHLink <: AbstractLink
+    a::Float64
+    alpha::Float64
+    d::Float64
+    theta::Float64
+end
+
+"""
+Struct representing a robot manipulator using DH parameters.
+"""
+struct DHRobotManipulator <: AbstractRobotManipulator
+    dh_params::Vector{DHLink}
+    mass::Vector{Float64}
+    inertia::Vector{Matrix{Float64}}
+    gravity::Vector{Float64}
+end
+
+"""
+Local joint DH transformation matrix.
+"""
+function local_transform(joint_variable::Float64, link::DHLink)::Matrix{Float64}
+    theta = link.theta + joint_variable
+    alpha = link.alpha
+    a = link.a
+    d = link.d
+
+    T = [
+        cos(theta) -sin(theta)*cos(alpha)  sin(theta)*sin(alpha)  a*cos(theta);
+        sin(theta)  cos(theta)*cos(alpha) -cos(theta)*sin(alpha)  a*sin(theta);
+        0       sin(alpha)         cos(alpha)         d;
+        0       0              0              1
+    ]
+    return T
+end
+
+"""
 Constraints for trajectory optimization.
 
 # Fields
@@ -45,8 +88,6 @@ struct TrajectoryConstraints
     jerk_limits::Vector{Float64}
     position_limits::Tuple{Vector{Float64}, Vector{Float64}}
 end
-
-
 
 """
 Joint space trajectory representation.
@@ -80,22 +121,6 @@ struct TrajectoryResult
     feasible::Bool
 end
 
-struct DHLink
-    a::Float64
-    alpha::Float64
-    d::Float64
-    theta::Float64
-end
-
-function dh_transform(theta::Float64, d::Float64, a::Float64, alpha::Float64)::Matrix{Float64}
-    return [
-        cos(theta) -sin(theta)*cos(alpha)  sin(theta)*sin(alpha) a*cos(theta);
-        sin(theta)  cos(theta)*cos(alpha) -cos(theta)*sin(alpha) a*sin(theta);
-        0           sin(alpha)             cos(alpha)            d;
-        0           0                      0                     1
-    ]
-    
-end
 """
 Compute forward kinematics mapping joint positions to end-effector pose.
 
