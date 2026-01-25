@@ -144,18 +144,21 @@ function forward_kinematics(
     robot::DHRobotManipulator,
     joint_positions::Vector{Float64}
 )::Vector{Float64}
-
-    @assert length(joint_positions) == length(robot.dh_params)
-
-    T = @SMatrix eye(4)
-
+    T = SMatrix{4,4,Float64,16}(
+        1,0,0,0,
+        0,1,0,0,
+        0,0,1,0,
+        0,0,0,1
+    )
     for (q, link) in zip(joint_positions, robot.dh_params)
         T *= local_transform(q, link)
     end
-
-    return Vector(T[1:3, 4])   # [x, y, z]
+    pos = T[1:3,4]
+    r = atan(T[2,3], T[3,3])
+    p = -asin(-T[1,3])
+    y = atan(T[1,2], T[1,1])
+    return [pos; y; p; r]
 end
-
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
 
