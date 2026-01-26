@@ -76,6 +76,11 @@ function local_transform(joint_variable::Float64, link::DHLink)::Matrix{Float64}
 end
 
 """
+Abstract constraint-based manipulator
+"""
+abstract type AbstractConstraintManipulator <: AbstractRobotManipulator end
+
+"""
 Constraints for trajectory optimization.
 
 # Fields
@@ -92,6 +97,27 @@ struct TrajectoryConstraints
     jerk_limits::Vector{Float64}
     position_limits::Tuple{Vector{Float64}, Vector{Float64}}
 end
+
+"""
+Kinematic constraint equations Φ(q, x)
+"""
+function kinematic_constraints(
+    robot::AbstractConstraintManipulator,
+    q::Vector{Float64},
+    x::Vector{Float64}
+)::Vector{Float64}
+    error("kinematic_constraints not implemented for $(typeof(robot))")
+end
+
+"""
+Dimension of Cartesian state x
+"""
+function cartesian_dimension(
+    robot::AbstractConstraintManipulator
+)::Int
+    error("cartesian_dimension not implemented")
+end
+
 
 """
 Joint space trajectory representation.
@@ -127,38 +153,85 @@ end
 
 """
 Compute forward kinematics (end-effector position).
-
-Contract: must be implemented for each concrete manipulator.
 """
-function forward_kinematics(
-    robot::AbstractRobotManipulator,
-    joint_positions::Vector{Float64}
+"""
+Compute forward kinematics for constraint-based manipulators.
+"""
+
+function solve_forward_kinematics(
+    robot::AbstractConstraintManipulator,
+    q::Vector{Float64};
+    initial_guess::Vector{Float64},
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
 )::Vector{Float64}
-    error("forward_kinematics not implemented for $(typeof(robot))")
+
+    x = copy(initial_guess)
+
+    for _ in 1:max_iterations
+        Φ = kinematic_constraints(robot, q, x)
+
+        if norm(Φ) < tolerance
+            return x
+        end
+
+        J = ForwardDiff.jacobian(
+            ξ -> kinematic_constraints(robot, q, ξ),
+            x
+        )
+
+        x -= J \ Φ
+    end
+
+    error("Forward kinematics did not converge")
 end
-
 """
-Forward kinematics for serial DH manipulator.
+Compute forward kinematics mapping joint positions to end-effector position.
 """
-function forward_kinematics(
+function forward_kinematics_DH_case(
     robot::DHRobotManipulator,
-    joint_positions::Vector{Float64}
+    joint_positions::Vector{Float64};
+    initial_guess = nothing,
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
 )::Vector{Float64}
-    T = SMatrix{4,4,Float64,16}(
-        1,0,0,0,
-        0,1,0,0,
-        0,0,1,0,
-        0,0,0,1
-    )
+
+    T = Matrix{Float64}(I, 4, 4)
+
     for (q, link) in zip(joint_positions, robot.dh_params)
         T *= local_transform(q, link)
     end
-    pos = T[1:3,4]
-    r = atan(T[2,3], T[3,3])
-    p = -asin(-T[1,3])
-    y = atan(T[1,2], T[1,1])
-    return [pos; y; p; r]
+
+    return T[1:3, 4]
 end
+"""
+Compute forward kinematics mapping joint positions to end-effector position.
+"""
+function forward_kinematics(
+    robot::AbstractConstraintManipulator,
+    q::Vector{Float64};
+    initial_guess::Vector{Float64},
+    tolerance = 1e-6,
+    max_iterations = 100,
+    DH_params=false
+)
+    if DH_params
+        return forward_kinematics_DH_case(
+            robot::DHRobotManipulator,
+            q;
+            initial_guess=initial_guess,
+            tolerance=tolerance,
+            max_iterations=max_iterations
+        )
+    end
+    return solve_forward_kinematics(
+        robot, q;
+        initial_guess=initial_guess,
+        tolerance=tolerance,
+        max_iterations=max_iterations
+    )
+end
+
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
 
