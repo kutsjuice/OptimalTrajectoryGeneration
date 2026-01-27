@@ -28,6 +28,43 @@ Users should create concrete subtypes for their specific robots.
 abstract type AbstractRobotManipulator end
 
 """
+Type representing a robot with DH matrix.
+"""
+struct DHRobot <: AbstractRobotManipulator
+    dh_params::Vector{DHLink}
+    gravity::SVector{3, Float64}
+end
+
+"""
+Type representing a manipulator link with DH parameters.
+"""
+struct DHLink <: AbstractLink
+    a::Float64
+    alpha::Float64
+    d::Float64
+    theta::Float64
+    com::SVector{3, Float64}
+    inertia::SMatrix{3,3,Float64,9}
+end
+
+"""
+Compute local transformation matrix for a DH link given joint variable.
+"""
+function local_transform(joint_variable::Float64, link::DHLink)::SMatrix{4,4,Float64,16}
+    theta = link.theta + joint_variable
+    alpha = link.alpha
+    a = link.a
+    d = link.d
+    T = @SMatrix [
+        cos(theta) -sin(theta)*cos(alpha)  sin(theta)*sin(alpha)  a*cos(theta);
+        sin(theta)  cos(theta)*cos(alpha) -cos(theta)*sin(alpha)  a*sin(theta);
+        0           sin(alpha)             cos(alpha)             d;
+        0           0                     0                     1
+    ]
+    return T
+end
+
+"""
 Constraints for trajectory optimization.
 
 # Fields
@@ -101,6 +138,16 @@ function forward_kinematics(
     error("forward_kinematics not implemented for robot type $(typeof(robot))")
 end
 
+function forward_kinematics(
+    robot::DHRobot,
+    joint_positions::Vector{Float64},
+)::SVector{3, Float64}
+    T = SMatrix{4,4,Float64,16}(I)
+    for (i, link) in enumerate(robot.dh_params)
+        T_link = local_transform(joint_positions[i], link)
+        T = T * T_link
+    end
+
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
 
@@ -121,7 +168,18 @@ function inverse_kinematics(
     tolerance::Float64=1e-6,
     max_iterations::Int=100
 )::Vector{Float64}
-    error("inverse_kinematics not implemented for robot type $(typeof(robot))")
+    pose = copy(target_pose)
+    x = initial_guess
+    for iter in 1:max_iterations
+        current_pose = forward_kinematics(robot, x)
+        error_vec = pose - current_pose
+        if norm(error_vec) < tolerance
+            return x
+        end
+        J = jacobian(robot, x)
+        Δx = pinv(J) * error_vec
+        x += Δx
+    end
 end
 
 """
@@ -134,8 +192,11 @@ Compute manipulator Jacobian matrix.
 # Returns
 - `Matrix{Float64}`: Jacobian matrix
 """
-function jacobian(robot::AbstractRobotManipulator, joint_positions::Vector{Float64})::Matrix{Float64}
-    error("jacobian not implemented for robot type $(typeof(robot))")
+function jacobian(
+    robot::AbstractRobotManipulator,
+    joint_positions::Vector{Float64}
+)::Matrix{Float64}
+    return ForwardDiff.jacobian(q -> forward_kinematics(robot, q), joint_positions)
 end
 
 """
