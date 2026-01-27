@@ -45,7 +45,7 @@ struct DHLink <: AbstractLink
     alpha::Float64
     d::Float64
     theta::Float64
-    com::Vector{Float64}
+    com::SVector{3, Float64}
 end
 
 """
@@ -155,12 +155,22 @@ end
 """
 Compute forward kinematics (end-effector position).
 """
+function forward_kinematics(
+    robot::AbstractRobotManipulator,
+    joint_positions::Vector{Float64};
+    initial_guess::Vector{Float64},
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
+)
+    error("forward_kinematics not implemented for $(typeof(robot))")
+end
+
 """
 Compute forward kinematics for constraint-based manipulators.
 """
-function forward_kinematics(
+function solve_forward_kinematics(
     robot::AbstractConstraintManipulator,
-    q::Vector{Float64};
+    joint_positions::Vector{Float64};
     initial_guess::Vector{Float64},
     tolerance::Float64 = 1e-6,
     max_iterations::Int = 100
@@ -185,21 +195,39 @@ function forward_kinematics(
 
     error("Forward kinematics did not converge")
 end
+
+function forward_kinematics(
+    robot::AbstractConstraintManipulator,
+    q::Vector{Float64};
+    initial_guess::Vector{Float64},
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
+)::Vector{Float64}
+
+    return solve_forward_kinematics(
+        robot,
+        q;
+        initial_guess = initial_guess,
+        tolerance = tolerance,
+        max_iterations = max_iterations
+    )
+end
+
 """
 Compute forward kinematics mapping joint positions to end-effector position.
 """
 function forward_kinematics(
     robot::DHRobotManipulator,
-    joint_positions::Vector{Float64};
-    initial_guess = nothing,
+    q::Vector{Float64};
+    initial_guess::Vector{Float64},
     tolerance::Float64 = 1e-6,
     max_iterations::Int = 100
 )::Vector{Float64}
 
     T = Matrix{Float64}(I, 4, 4)
 
-    for (q, link) in zip(joint_positions, robot.dh_params)
-        T *= local_transform(q, link)
+    for (qi, link) in zip(q, robot.dh_params)
+        T *= local_transform(qi, link)
     end
 
     return T[1:3, 4]
@@ -220,18 +248,62 @@ Compute inverse kinematics mapping end-effector pose to joint positions.
 - `Vector{Float64}`: Joint positions
 """
 function inverse_kinematics(
-    robot::AbstractRobotManipulator,
+    robot::AbstractConstraintManipulator,
     target_pose::Vector{Float64},
-    initial_guess::Vector{Float64};
+    q0::Vector{Float64},
+    x0::Vector{Float64};
     tolerance::Float64 = 1e-6,
     max_iterations::Int = 100
 )::Vector{Float64}
 
-    q = copy(initial_guess)
+    q = copy(q0)
+    x = copy(x0)
 
     for _ in 1:max_iterations
-        r = forward_kinematics(robot, q) - target_pose
-        norm(r) < tolerance && return q
+        fk = forward_kinematics(
+            robot,
+            q;
+            initial_guess = x,
+            tolerance = tolerance,
+            max_iterations = max_iterations
+        )
+
+        r = fk - target_pose
+
+        if norm(r) < tolerance
+            return q
+        end
+
+        J = jacobian(robot, q)
+        q -= J \ r
+
+        # warm-start для следующей FK
+        x = fk
+    end
+
+    error("Inverse kinematics did not converge")
+end
+
+function inverse_kinematics(
+    robot::DHRobotManipulator,
+    target_pose::Vector{Float64},
+    q0::Vector{Float64};
+    tolerance::Float64 = 1e-6,
+    max_iterations::Int = 100
+)::Vector{Float64}
+
+    q = copy(q0)
+
+    for _ in 1:max_iterations
+        r = forward_kinematics(
+            robot,
+            q;
+            initial_guess = zeros(3)
+        ) - target_pose
+
+        if norm(r) < tolerance
+            return q
+        end
 
         J = jacobian(robot, q)
         q -= J \ r
@@ -239,6 +311,7 @@ function inverse_kinematics(
 
     error("Inverse kinematics did not converge")
 end
+
 
 """
 Compute manipulator Jacobian matrix.
