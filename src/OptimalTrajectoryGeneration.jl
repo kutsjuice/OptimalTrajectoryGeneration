@@ -33,6 +33,7 @@ Type representing a robot with DH matrix.
 struct DHRobot <: AbstractRobotManipulator
     dh_params::Vector{DHLink}
     gravity::SVector{3, Float64}
+    dof::Int
 end
 
 """
@@ -45,6 +46,13 @@ struct DHLink <: AbstractLink
     theta::Float64
     com::SVector{3, Float64}
     inertia::SMatrix{3,3,Float64,9}
+    mass::Float64
+    is_revolute::Bool
+end
+
+function DHRobot(links::Vector{DHLink}, gravity::SVector{3, Float64})
+    dof = length(links)
+    return DHRobot(links, gravity, dof)
 end
 
 """
@@ -197,6 +205,108 @@ function jacobian(
     joint_positions::Vector{Float64}
 )::Matrix{Float64}
     return ForwardDiff.jacobian(q -> forward_kinematics(robot, q), joint_positions)
+end
+
+"""
+Recursive Newton-Euler algorithm
+"""
+function newton_euler(
+    robot::DHRobot,
+    joint_positions::Vector{Float64},
+    joint_velocities::Vector{Float64},
+    joint_accelerations::Vector{Float64}
+)::Vector{Float64}
+    num_joints = robot.dof
+    gravity_vector = robot.gravity
+    robot_links = robot.links
+
+    angular_velocities = Vector{SVector{3, Float64}}(undef, num_joints)
+    angular_accelerations = Vector{SVector{3, Float64}}(undef, num_joints)
+    linear_accelerations = Vector{SVector{3, Float64}}(undef, num_joints)
+    com_accelerations = Vector{SVector{3, Float64}}(undef, num_joints)
+    
+    forces = Vector{SVector{3, Float64}}(undef, num_joints + 1)
+    moments = Vector{SVector{3, Float64}}(undef, num_joints + 1)
+    
+    generalized_forces = zeros(Float64, num_joints)
+
+    current_angular_velocity = @SVector [0.0, 0.0, 0.0]
+    current_angular_acceleration = @SVector [0.0, 0.0, 0.0]
+    current_linear_acceleration = gravity_vector
+
+    local_z_axis = @SVector [0.0, 0.0, 1.0]
+    
+    for link_index in 1:num_joints
+        current_link = robot_links[link_index]
+
+        if current_link.is_revolute
+            current_joint_angle = current_link.joint_angle + joint_positions[link_index]
+            current_link_offset = current_link.link_offset
+        else
+            current_joint_angle = current_link.joint_angle
+            current_link_offset = current_link.link_offset + joint_positions[link_index]
+        end
+
+        transformation_matrix = local_transform(
+            current_link.a,
+            current_link.alpha,
+            current_link.d,
+            current_link.theta
+        )
+
+        rotation_matrix = transformation_matrix[1:3, 1:3]
+        position_vector = transformation_matrix[1:3, 4]
+
+        angular_velocity = rotation_matrix' * current_angular_velocity
+        if current_link.is_revolute
+            angular_velocity += local_z_axis * joint_velocities[link_index]
+        end
+
+        angular_acceleration = rotation_matrix' * current_angular_acceleration
+        if current_link.is_revolute
+            angular_acceleration += cross(rotation_matrix' * current_angular_velocity, 
+                                          local_z_axis * joint_velocities[link_index])
+            angular_acceleration += local_z_axis * joint_accelerations[link_index]
+        end
+
+        if link_index == 1
+            linear_acceleration = rotation_matrix' * current_linear_acceleration
+        else
+            previous_position = position_vectors[link_index - 1]
+            linear_acceleration = rotation_matrix' * (
+                current_linear_acceleration +
+                cross(current_angular_acceleration, previous_position) +
+                cross(current_angular_velocity, cross(current_angular_velocity, previous_position))
+            )
+        end
+
+        if !current_link.is_revolute
+            linear_acceleration += local_z_axis * joint_accelerations[link_index] +
+                                   2 * cross(angular_velocity, local_z_axis * joint_velocities[link_index])
+        end
+
+        com_acceleration = linear_acceleration +
+                          cross(angular_acceleration, current_link.center_of_mass) +
+                          cross(angular_velocity, cross(angular_velocity, current_link.center_of_mass))
+
+        angular_velocities[link_index] = angular_velocity
+        angular_accelerations[link_index] = angular_acceleration
+        linear_accelerations[link_index] = linear_acceleration
+        com_accelerations[link_index] = com_acceleration
+
+        current_angular_velocity = angular_velocity
+        current_angular_acceleration = angular_acceleration
+        current_linear_acceleration = linear_acceleration
+
+        if link_index == 1
+            position_vectors = Vector{SVector{3, Float64}}(undef, num_joints)
+        end
+        position_vectors[link_index] = position_vector
+    end
+
+    # backward pass
+    forces[num_joints + 1] = @SVector [0.0, 0.0, 0.0]
+    moments[num_joints + 1] = @SVector [0.0, 0.0, 0.0]
 end
 
 """
