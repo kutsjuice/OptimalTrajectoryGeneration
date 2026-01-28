@@ -22,19 +22,11 @@ export
     generate_joint_trajectory
 
 """
-Abstract type representing a robot manipulator.
+Abstract type representing a robot manipulator and robot links.
 Users should create concrete subtypes for their specific robots.
 """
 abstract type AbstractRobotManipulator end
-
-"""
-Type representing a robot with DH matrix.
-"""
-struct DHRobot <: AbstractRobotManipulator
-    dh_params::Vector{DHLink}
-    gravity::SVector{3, Float64}
-    dof::Int
-end
+abstract type AbstractLink end
 
 """
 Type representing a manipulator link with DH parameters.
@@ -48,6 +40,15 @@ struct DHLink <: AbstractLink
     inertia::SMatrix{3,3,Float64,9}
     mass::Float64
     is_revolute::Bool
+end
+
+"""
+Type representing a robot with DH matrix.
+"""
+struct DHRobot <: AbstractRobotManipulator
+    dh_params::Vector{DHLink}
+    gravity::SVector{3, Float64}
+    dof::Int
 end
 
 function DHRobot(links::Vector{DHLink}, gravity::SVector{3, Float64})
@@ -143,7 +144,9 @@ function forward_kinematics(
     initial_guess::Vector{Float64}=zeros(length(joint_positions));
     tolerance::Float64=1e-6,
     max_iterations::Int=100)::Vector{Float64}
+
     error("forward_kinematics not implemented for robot type $(typeof(robot))")
+
 end
 
 function forward_kinematics(
@@ -155,6 +158,9 @@ function forward_kinematics(
         T_link = local_transform(joint_positions[i], link)
         T = T * T_link
     end
+    position = @SVector [T[1,4], T[2,4], T[3,4]]
+    return position
+end
 
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
