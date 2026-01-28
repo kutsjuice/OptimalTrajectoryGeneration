@@ -209,6 +209,15 @@ end
 
 """
 Recursive Newton-Euler algorithm
+
+# Arguments
+- `robot::DHRobot`: Robot instance
+- `joint_positions::Vector{Float64}`: Joint positions
+- `joint_velocities::Vector{Float64}`: Joint velocities
+- `joint_accelerations::Vector{Float64}`: Joint accelerations
+
+# Returns
+- `Vector{Float64}`: Generalized forces (torques/forces) at each joint
 """
 function newton_euler(
     robot::DHRobot,
@@ -248,10 +257,8 @@ function newton_euler(
         end
 
         transformation_matrix = local_transform(
-            current_link.a,
-            current_link.alpha,
-            current_link.d,
-            current_link.theta
+            current_joint_angle,
+            current_link
         )
 
         rotation_matrix = transformation_matrix[1:3, 1:3]
@@ -307,6 +314,59 @@ function newton_euler(
     # backward pass
     forces[num_joints + 1] = @SVector [0.0, 0.0, 0.0]
     moments[num_joints + 1] = @SVector [0.0, 0.0, 0.0]
+    for link_index in num_joints:-1:1
+        current_link = robot_links[link_index]
+
+        if current_link.is_revolute
+            current_joint_angle = current_link.joint_angle + joint_positions[link_index]
+            current_link_offset = current_link.link_offset
+        else
+            current_joint_angle = current_link.joint_angle
+            current_link_offset = current_link.link_offset + joint_positions[link_index]
+        end
+        transformation_matrix = local_transform(
+            current_joint_angle,
+            current_link
+        )
+        rotation_matrix = transformation_matrix[1:3, 1:3]
+        position_vector = transformation_matrix[1:3, 4]
+        force_at_com = current_link.mass * com_accelerations[link_index]
+        moment_at_com = current_link.inertia * angular_accelerations[link_index] +
+                        cross(angular_velocities[link_index], current_link.inertia * angular_velocities[link_index])
+        
+        if link_index == num_joints
+            total_force = force_at_com
+            total_moment = moment_at_com + cross(current_link.center_of_mass, force_at_com)
+        else
+            next_link = robot_links[link_index + 1]
+
+            if next_link.is_revolute
+                next_joint_angle = next_link.joint_angle + joint_positions[link_index + 1]
+            else
+                next_joint_angle = next_link.joint_angle
+            end
+
+            next_transformation_matrix = local_transform(
+                next_joint_angle,
+                next_link
+            )
+            next_rotation_matrix = next_transformation_matrix[1:3, 1:3]
+            total_force = next_rotation_matrix * forces[link_index + 1] + force_at_com
+            total_moment = moment_at_com +
+                           next_rotation_matrix * moments[link_index + 1] +
+                           cross(current_link.center_of_mass, force_at_com) +
+                           cross(position_vector, next_rotation_matrix * forces[link_index + 1])
+        end
+
+        forces[link_index] = total_force
+        moments[link_index] = total_moment
+        if current_link.is_revolute
+            generalized_forces[link_index] = dot(total_moment, local_z_axis)
+        else
+            generalized_forces[link_index] = dot(total_force, local_z_axis)
+        end
+    end
+    return generalized_forces
 end
 
 """
@@ -327,6 +387,53 @@ function compute_mass_and_force_terms(
 )::Tuple{Matrix{Float64}, Vector{Float64}}
     error("compute_mass_and_force_terms not implemented for robot type $(typeof(robot))")
 end
+
+function compute_mass_and_force_terms(
+    robot::DHRobot,
+    joint_positions::Vector{Float64},
+    joint_velocities::Vector{Float64}
+)::Tuple{Matrix{Float64}, Vector{Float64}}
+    num_joints = robot.dof
+    # Compute mass matrix
+    mass_matrix = zeros(Float64, num_joints, num_joints)
+    zero_velocities = zeros(Float64, num_joints)
+    for i in 1:num_joints
+        test_acceleration = zeros(Float64, num_joints)
+        test_acceleration[i] = 1.0
+
+        mass_matrix[:, i] = newton_euler(
+            robot,
+            joint_positions,
+            zero_velocities,
+            test_acceleration
+        )
+    end
+
+    symmetric_error = norm(mass_matrix - mass_matrix')
+    if symmetric_error > 1e-10
+        @warn "Mass matrix is not symmetric"
+    end
+    # Compute gravity vector
+    gravity_vector = newton_euler(
+        robot,
+        joint_positions,
+        zero_velocities,
+        zero_velocities
+    )
+
+    # Compute Coriolis and centrifugal terms
+    total_forces = newton_euler(
+        robot,
+        joint_positions,
+        joint_velocities,
+        zero_accelerations
+    )
+
+    coriolis_centrifugal = total_forces - gravity_vector
+
+    return (mass_matrix, coriolis_centrifugal)
+end
+
 
 """
 AbstractCartesianPath type representing a trajectory path.
@@ -384,4 +491,5 @@ function generate_joint_trajectory(
 )::TrajectoryResult
     error("generate_joint_trajectory not implemented for robot type $(typeof(robot))")
 end
+
 end # module
