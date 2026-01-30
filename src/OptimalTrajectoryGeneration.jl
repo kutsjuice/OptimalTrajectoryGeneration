@@ -3,6 +3,7 @@ module OptimalTrajectoryGeneration
 using LinearAlgebra
 using StaticArrays
 using ForwardDiff
+using Statistics
 
 export
     AbstractRobotManipulator,
@@ -120,6 +121,16 @@ struct TrajectoryConstraints
     position_limits::Tuple{Vector{Float64}, Vector{Float64}}
 end
 
+function TrajectoryConstraints(dof::Int)
+    TrajectoryConstraints(
+        fill(1.0, dof),  # velocity_limits
+        fill(1.0, dof),  # acceleration_limits
+        fill(1.0, dof),  # torque_limits
+        fill(1.0, dof),  # jerk_limits
+        (fill(-π, dof), fill(π, dof))  # position_limits
+    )
+end
+
 """
 Joint space trajectory representation.
 
@@ -198,6 +209,8 @@ function inverse_se3(T::SMatrix{4,4,Float64})
     ]
 end
 
+cot(x) = 1 / tan(x)
+
 function log_se3(T::SMatrix{4,4,Float64})
     R = T[1:3,1:3]
     p = T[1:3,4]
@@ -214,7 +227,7 @@ function log_se3(T::SMatrix{4,4,Float64})
         else
             omega_skew = (R - R') / (2 * sin(theta))
             omega = @SVector [omega_skew[3,2], omega_skew[1,3], omega_skew[2,1]] * theta
-            omega_hat = skew(omega / theta * theta)  # normalized
+            omega_hat = skew(omega / theta)  # normalized
             if abs(theta) > pi - 1e-2
                 theta = theta - 2*pi * sign(theta - pi)
             end
@@ -226,6 +239,15 @@ function log_se3(T::SMatrix{4,4,Float64})
         end
     end
     @SVector [omega[1], omega[2], omega[3], v[1], v[2], v[3]]
+end
+
+function inv_se3(T::SMatrix{4,4,Float64})
+    R = T[1:3, 1:3]
+    p = T[1:3, 4]
+    return @SMatrix [
+        R'  -R' * p;
+        0   0   0   1
+    ]
 end
 
 function forward_kinematics(
@@ -348,9 +370,9 @@ function newton_euler(
     Vd = fill(@SVector zeros(6), n)
     F = fill(@SVector zeros(6), n)
     g = @SVector [0.0, 0.0, 0.0,
-              -robot.gravity[1],
-              -robot.gravity[2],
-              -robot.gravity[3]]
+              robot.gravity[1],
+              robot.gravity[2],
+              robot.gravity[3]]
 
     # Forward recursion
     for i in 1:n
@@ -531,7 +553,6 @@ Compute limit path speed along the joint path given trajectory constraints.
 # Returns
 - `Vector{Float64}`: Limit path speed at discretized points along the path
 """
-
 function compute_limit_path_speed(
     robot::AbstractRobotManipulator,
     joint_path::AbstractJointPath, 
@@ -539,28 +560,212 @@ function compute_limit_path_speed(
     error("compute_limit_phase_velocity not implemented for path type $(typeof(joint_path))")
 end
 
-
 function compute_limit_path_speed(
     robot::SerialManipulator,
     joint_path::BezierJointPath, 
-    constraints::TrajectoryConstraints)::Vector{Float64}
-
+    constraints::TrajectoryConstraints
+)::Vector{Float64}
+    # Discretize path parameter
+    N = 100  # Number of discretization points
+    theta = range(0.0, 1.0, length=N)
+    
+    # Initialize velocity profile
+    velocity_profile = zeros(Float64, N)
+    
+    # Extract velocity limits from constraints
+    w_max = constraints.velocity_limits
+    
+    for i in 1:N
+        # Get derivative of joint configuration w.r.t. theta
+        dq_dtheta = evaluate_path(joint_path, theta[i], 1)
+        
+        # Compute velocity limits for each joint
+        v_limits = zeros(Float64, length(dq_dtheta))
+        for j in 1:length(dq_dtheta)
+            if abs(dq_dtheta[j]) > 1e-8
+                v_limits[j] = abs(w_max[j] / dq_dtheta[j])
+            else
+                v_limits[j] = Inf
+            end
+        end
+        
+        # Take minimum as the limiting factor
+        velocity_profile[i] = minimum(v_limits)
+    end
+    
+    return velocity_profile
 end
 
+"""
+Generate joint trajectory based on path speed profile.
+# Arguments
+- `robot::AbstractRobotManipulator`: Robot instance
+- `joint_path::AbstractJointPath`: Joint space path
+- `path_speed::Vector{Float64}`: Path speed profile
+- `time_step::Float64`: Time discretization step
+# Returns
+- `TrajectoryResult`: Complete trajectory with positions, velocities, accelerations, and torques
+"""
 function generate_joint_trajectory(
     robot::AbstractRobotManipulator,
-    path_speed::Vector{Vector{Float64}},
-    time_step::Float64,
+    joint_path::AbstractJointPath,
+    path_speed::Vector{Float64},
+    time_step::Float64
 )::TrajectoryResult
     error("generate_joint_trajectory not implemented for robot type $(typeof(robot))")
 end
 
 function generate_joint_trajectory(
     robot::SerialManipulator,
-    path_speed::Vector{Vector{Float64}},
-    time_step::Float64,
+    joint_path::BezierJointPath,
+    path_speed::Vector{Float64},
+    time_step::Float64
 )::TrajectoryResult
-
+    # Discretize path parameter
+    N = length(path_speed)
+    theta = range(0.0, 1.0, length=N)
+    dtheta = theta[2] - theta[1]
+    
+    # Compute time from velocity profile (trapezoidal integration)
+    time = zeros(Float64, N)
+    for i in 2:N-1
+        # Average velocity on the segment
+        v_avg = (path_speed[i-1] + path_speed[i]) / 2
+        if v_avg > 0
+            time[i] = time[i-1] + dtheta / v_avg
+        else
+            time[i] = time[i-1]
+        end
+    end
+    
+    # Polynomial extrapolation for last point
+    if N >= 4
+        A = hcat(ones(3), theta[end-3:end-1], theta[end-3:end-1].^2)
+        coeffs = A \ time[end-3:end-1]
+        time[end] = coeffs[1] + coeffs[2] * theta[end] + coeffs[3] * theta[end]^2
+    else
+        time[end] = time[end-1] + dtheta / path_speed[end-1]
+    end
+    
+    # Generate trajectory at specified time steps
+    t_final = time[end]
+    time_points = 0.0:time_step:t_final
+    n_points = length(time_points)
+    
+    # Initialize result arrays
+    dof = robot.dof
+    positions = zeros(Float64, dof, n_points)
+    velocities = zeros(Float64, dof, n_points)
+    accelerations = zeros(Float64, dof, n_points)
+    torques = zeros(Float64, dof, n_points)
+    
+    # Create interpolation function for theta(t)
+    # Simple linear interpolation for now
+    function theta_of_t(t)
+        idx = searchsortedlast(time, t)
+        if idx == 0
+            return theta[1]
+        elseif idx >= N
+            return theta[end]
+        else
+            α = (t - time[idx]) / (time[idx+1] - time[idx])
+            return (1 - α) * theta[idx] + α * theta[idx+1]
+        end
+    end
+    
+    # Compute trajectory for each time point
+    for (idx, t) in enumerate(time_points)
+        # Get theta and its derivatives at current time
+        θ = theta_of_t(t)
+        
+        # Find time interval for finite differences
+        idx_t = searchsortedlast(time, t)
+        if idx_t == 0
+            idx_t = 1
+        elseif idx_t >= N-1
+            idx_t = N-2
+        end
+        
+        # Finite differences for dθ/dt and d²θ/dt²
+        dt1 = time[idx_t+1] - time[idx_t]
+        dt2 = time[idx_t+2] - time[idx_t+1]
+        θ1 = theta[idx_t]
+        θ2 = theta[idx_t+1]
+        θ3 = theta[idx_t+2]
+        
+        # First derivative (central difference)
+        if idx_t == 1
+            dθ_dt = (θ2 - θ1) / dt1
+        elseif idx_t >= N-1
+            dθ_dt = (θ2 - θ1) / dt1
+        else
+            dθ_dt = (θ3 - θ1) / (dt1 + dt2)
+        end
+        
+        # Second derivative
+        if idx_t == 1 || idx_t >= N-1
+            d2θ_dt2 = 0.0
+        else
+            d2θ_dt2 = 2 * ((θ3 - θ2)/dt2 - (θ2 - θ1)/dt1) / (dt1 + dt2)
+        end
+        
+        # Get joint configuration and its derivatives
+        q = evaluate_path(joint_path, θ, 0)
+        dq_dθ = evaluate_path(joint_path, θ, 1)
+        d2q_dθ2 = evaluate_path(joint_path, θ, 2)
+        
+        # Compute joint velocities and accelerations using chain rule
+        dq_dt = dq_dθ * dθ_dt
+        d2q_dt2 = d2q_dθ2 * (dθ_dt^2) + dq_dθ * d2θ_dt2
+        
+        # Compute torques using robot dynamics
+        τ = newton_euler(robot, q, dq_dt, d2q_dt2)
+        
+        # Store results
+        positions[:, idx] = q
+        velocities[:, idx] = dq_dt
+        accelerations[:, idx] = d2q_dt2
+        torques[:, idx] = τ
+    end
+    
+    # Compute cartesian trajectory
+    cartesian_trajectory = zeros(Float64, 3, n_points)
+    for i in 1:n_points
+        T = forward_kinematics(robot, positions[:, i])
+        cartesian_trajectory[:, i] = T[1:3, 4]
+    end
+    
+    # Check constraints feasibility (simplified check)
+    feasible = true
+    for i in 1:dof
+        if any(abs.(torques[i, :]) .> constraints.torque_limits[i])
+            feasible = false
+            break
+        end
+    end
+    
+    return TrajectoryResult(
+        JointTrajectory(positions, velocities, accelerations),
+        torques,
+        time_points,
+        cartesian_trajectory,
+        feasible
+    )
 end
 
-end # module
+# Helper functions for polynomial fitting
+function polyfit(x::Vector{Float64}, y::Vector{Float64}, order::Int)
+    A = zeros(Float64, length(x), order+1)
+    for i in 0:order
+        A[:, i+1] = x.^i
+    end
+    return A \ y
+end
+
+function polyval(coeffs::Vector{Float64}, x::Float64)
+    result = 0.0
+    for (i, c) in enumerate(coeffs)
+        result += c * x^(i-1)
+    end
+    return result
+end
