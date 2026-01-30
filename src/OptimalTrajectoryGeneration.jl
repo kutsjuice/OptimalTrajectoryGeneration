@@ -752,3 +752,5 @@ function generate_joint_trajectory(
         feasible
     )
 end
+
+end
