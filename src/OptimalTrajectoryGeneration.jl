@@ -752,20 +752,3 @@ function generate_joint_trajectory(
         feasible
     )
 end
-
-# Helper functions for polynomial fitting
-function polyfit(x::Vector{Float64}, y::Vector{Float64}, order::Int)
-    A = zeros(Float64, length(x), order+1)
-    for i in 0:order
-        A[:, i+1] = x.^i
-    end
-    return A \ y
-end
-
-function polyval(coeffs::Vector{Float64}, x::Float64)
-    result = 0.0
-    for (i, c) in enumerate(coeffs)
-        result += c * x^(i-1)
-    end
-    return result
-end
