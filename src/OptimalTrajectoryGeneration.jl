@@ -99,7 +99,6 @@ struct SerialManipulator <: AbstractRobotManipulator
     dof::Int
 end
 
-
 SerialManipulator(links, gravity) =
     SerialManipulator(links, gravity, length(links))
 
@@ -120,8 +119,6 @@ struct TrajectoryConstraints
     jerk_limits::Vector{Float64}
     position_limits::Tuple{Vector{Float64}, Vector{Float64}}
 end
-
-
 
 """
 Joint space trajectory representation.
@@ -191,6 +188,46 @@ function exp_twist(S::SVector{6}, θ::Float64)
     ]
 end
 
+function inverse_se3(T::SMatrix{4,4,Float64})
+    R = T[1:3, 1:3]
+    p = T[1:3, 3:4]
+
+    @SMatrix[
+        R' (-R' * p);
+        0.0 0.0 0.0 1.0
+    ]
+end
+
+function log_se3(T::SMatrix{4,4,Float64})
+    R = T[1:3,1:3]
+    p = T[1:3,4]
+    trR = tr(R)
+    if abs(trR - 3) < 1e-6
+        omega = @SVector zeros(3)
+        v = p
+    else
+        cos_theta = (trR - 1) / 2
+        theta = acos(clamp(cos_theta, -1.0, 1.0))
+        if theta < 1e-6
+            omega = @SVector zeros(3)
+            v = p
+        else
+            omega_skew = (R - R') / (2 * sin(theta))
+            omega = @SVector [omega_skew[3,2], omega_skew[1,3], omega_skew[2,1]] * theta
+            omega_hat = skew(omega / theta * theta)  # normalized
+            if abs(theta) > pi - 1e-2
+                theta = theta - 2*pi * sign(theta - pi)
+            end
+            half_theta = theta / 2
+            cot_half = cot(half_theta)
+            coef = 1 - half_theta * cot_half
+            inv_J = I(3) - 0.5 * omega_hat + (coef / (theta^2)) * (omega_hat * omega_hat)
+            v = inv_J * p
+        end
+    end
+    @SVector [omega[1], omega[2], omega[3], v[1], v[2], v[3]]
+end
+
 function forward_kinematics(
     robot::AbstractRobotManipulator, 
     joint_positions::Vector{Float64}, 
@@ -218,7 +255,7 @@ function forward_kinematics(
         T *= robot.links[i].X_parent
     end
 
-    return @SVector [T[1,4], T[2,4], T[3,4]]
+    T
 end
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
@@ -269,6 +306,24 @@ function jacobian(
     return ForwardDiff.jacobian(q -> forward_kinematics(robot, q), joint_positions)
 end
 
+function jacobian(
+    robot::SerialManipulator,
+    q::Vector{Float64}
+)::Matrix{Float64}
+    n = robot.dof
+    J = Matrix{Float64}(undef, 6, n)
+    Ad_cum = SMatrix{6,6,Float64}(I)
+    for i = n:-1:1
+        J[:, i] = Vector(Ad_cum * robot.links[i].screw_axis)
+        X_twist = exp_twist(robot.links[i].screw_axis, q[i])
+        X_fixed = robot.links[i].X_parent
+        X = X_twist * X_fixed
+        Ad = adjoint(X[1:3,1:3], X[1:3,4])
+        Ad_cum = Ad * Ad_cum
+    end
+    J
+end
+
 """
 Recursive Newton-Euler algorithm
 
@@ -292,7 +347,6 @@ function newton_euler(
     V = fill(@SVector zeros(6), n)
     Vd = fill(@SVector zeros(6), n)
     F = fill(@SVector zeros(6), n)
-
     g = @SVector [0.0, 0.0, 0.0,
               -robot.gravity[1],
               -robot.gravity[2],
@@ -301,7 +355,12 @@ function newton_euler(
     # Forward recursion
     for i in 1:n
         S = robot.links[i].screw_axis
-        X = exp_twist(S, q[i])
+        X_twist = exp_twist(S, q[i])
+        X = X_twist * robot.links[i].X_parent
+        X_inv = inv_se3(X)
+        R_inv = X_inv[1:3,1:3]
+        p_inv = X_inv[1:3,4]
+        AdX = adjoint(R_inv, p_inv)
 
         if i == 1
             V[i]  = S * qd[i]
@@ -321,14 +380,17 @@ function newton_euler(
         F[i] = I * Vd[i] + ad(V[i])' * (I * V[i])
 
         if i < n
-            X = exp_twist(robot.links[i+1].screw_axis, q[i+1])
-            AdX = adjoint(X[1:3,1:3], X[1:3,4])
+            S_next = robot.links[i+1].screw_axis
+            X_twist = exp_twist(robot.links[i+1].screw_axis, q[i+1])
+            X = X_twist * robot.links[i+1].X_parent
+            X_inv = inv_se3(X)
+            R_inv = X_inv[1:3,1:3]
+            p_inv = X_inv[1:3,4]
+            AdX = adjoint(R_inv, p_inv)
             F[i] += AdX' * F[i+1]
         end
-
         τ[i] = dot(robot.links[i].screw_axis, F[i])
     end
-
     return τ
 end
 
@@ -358,15 +420,12 @@ function compute_mass_and_force_terms(
 )
     n = robot.dof
     M = zeros(n,n)
-
     for i in 1:n
         qdd = zeros(n); qdd[i] = 1.0
         M[:,i] = newton_euler(robot, q, zeros(n), qdd)
     end
-
     g = newton_euler(robot, q, zeros(n), zeros(n))
     c = newton_euler(robot, q, qd, zeros(n)) - g
-
     return M, c
 end
 
@@ -428,6 +487,7 @@ Evaluate joint space path at parameter t ∈ [0, 1].
 - `Vector{Float64}`: Joint value or it's derivative at parameter t
 """
 function evaluate_path(path::AbstractJointPath, t::Float64, derivative::Int64=0)::Vector{Float64}
+    error("evaluate_path not implemented for path type $(typeof(path))")
 end
 
 function evaluate_path(
@@ -435,29 +495,21 @@ function evaluate_path(
     t::Float64,
     derivative::Int64 = 0
 )::Vector{Float64}
-
     @assert 0.0 ≤ t ≤ 1.0
     @assert derivative ≥ 0
-
     u = 1.0 - t
-
     if derivative == 0
         p = u^3 *path.q0 + 3u^2*t * path.q1 + 3u*t^2 * path.q2 + t^3 * path.q3
         return p
-
     elseif derivative == 1
         p = 3u^2 * (path.q1 - path.q0) + 6u*t * (path.q2 - path.q1) + 3t^2 * (path.q3 - path.q2)
         return p
-
     elseif derivative == 2
         p = 6u * (path.q2 - 2path.q1 + path.q0) + 6t * (path.q3 - 2path.q2 +path.q1)
         return p
-
     else
         error("Derivative type not supported")
-
     end
-
 end
 
 function joint_path_from_cartesian_bezier(
