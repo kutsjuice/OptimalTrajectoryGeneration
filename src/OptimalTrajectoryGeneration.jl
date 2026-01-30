@@ -18,7 +18,7 @@ export
     forward_kinematics,
     inverse_kinematics,
     jacobian,
-    compute_mass_and_force_terms
+    compute_mass_and_force_terms,
     
     evaluate_path,
     compute_limit_path_speed,
@@ -246,7 +246,7 @@ function inverse_kinematics(
         if norm(e) < tolerance
             return q
         end
-        J = jacobian(robot, q)[4:6, :]
+        J = jacobian(robot, q)
         q += pinv(J) * e
     end
     error("IK did not converge")
@@ -293,7 +293,10 @@ function newton_euler(
     Vd = fill(@SVector zeros(6), n)
     F = fill(@SVector zeros(6), n)
 
-    g = @SVector [0.0, 0.0, 0.0; -robot.gravity...]
+    g = @SVector [0.0, 0.0, 0.0,
+              -robot.gravity[1],
+              -robot.gravity[2],
+              -robot.gravity[3]]
 
     # Forward recursion
     for i in 1:n
@@ -373,6 +376,16 @@ AbstractCartesianPath type representing a trajectory path.
 abstract type AbstractCartesianPath end
 
 """
+Abstract Bezier cartesian path based on AbstractCartesianPath
+"""
+struct BezierCartesianPath <: AbstractCartesianPath
+    p0:: SVector{3, Float64}
+    p1:: SVector{3, Float64}
+    p2:: SVector{3, Float64}
+    p3:: SVector{3, Float64}
+end
+
+"""
 Evaluate point on path at parameter t ∈ [0, 1].
 
 # Arguments
@@ -386,7 +399,25 @@ function evaluate_path(path::AbstractCartesianPath, t::Float64)::Vector{Float64}
     error("evaluate_path not implemented for path type $(typeof(path))")
 end
 
+function evaluate_path(path::BezierCartesianPath, t::Float64)::Vector{Float64}
+    @assert 0.0 ≤ t ≤ 1.0
+
+    u = 1.0 - t
+    p = u^3 *path.p0 + 3u^2*t * path.p1 + 3u*t^2 * path.p2 + t^3 * path.p3
+
+    return Vector(p)
+end
+
+
 abstract type  AbstractJointPath end
+
+struct BezierJointPath <: AbstractJointPath
+    q0::Vector{Float64}
+    q1::Vector{Float64}
+    q2::Vector{Float64}
+    q3::Vector{Float64}
+end
+
 """
 Evaluate joint space path at parameter t ∈ [0, 1].
 # Arguments
@@ -399,7 +430,47 @@ Evaluate joint space path at parameter t ∈ [0, 1].
 function evaluate_path(path::AbstractJointPath, t::Float64, derivative::Int64=0)::Vector{Float64}
 end
 
+function evaluate_path(
+    path::BezierJointPath,
+    t::Float64,
+    derivative::Int64 = 0
+)::Vector{Float64}
 
+    @assert 0.0 ≤ t ≤ 1.0
+    @assert derivative ≥ 0
+
+    u = 1.0 - t
+
+    if derivative == 0
+        p = u^3 *path.q0 + 3u^2*t * path.q1 + 3u*t^2 * path.q2 + t^3 * path.q3
+        return p
+
+    elseif derivative == 1
+        p = 3u^2 * (path.q1 - path.q0) + 6u*t * (path.q2 - path.q1) + 3t^2 * (path.q3 - path.q2)
+        return p
+
+    elseif derivative == 2
+        p = 6u * (path.q2 - 2path.q1 + path.q0) + 6t * (path.q3 - 2path.q2 +path.q1)
+        return p
+
+    else
+        error("Derivative type not supported")
+
+    end
+
+end
+
+function joint_path_from_cartesian_bezier(
+    robot,
+    cartesian_path::BezierCartesianPath,
+    q_seed::Vector{Float64}
+)::BezierJointPath
+    q0 = inverse_kinematics(robot, evaluate_path(cartesian_path, 0.0), q_seed)
+    q1 = inverse_kinematics(robot, evaluate_path(cartesian_path, 1/3), q0)
+    q2 = inverse_kinematics(robot, evaluate_path(cartesian_path, 2/3), q1)
+    q3 = inverse_kinematics(robot, evaluate_path(cartesian_path, 1.0), q2)
+    return BezierJointPath(q0, q1, q2, q3)
+end
 """
 Compute limit path speed along the joint path given trajectory constraints.
 # Arguments
@@ -416,12 +487,28 @@ function compute_limit_path_speed(
     error("compute_limit_phase_velocity not implemented for path type $(typeof(joint_path))")
 end
 
+
+function compute_limit_path_speed(
+    robot::SerialManipulator,
+    joint_path::BezierJointPath, 
+    constraints::TrajectoryConstraints)::Vector{Float64}
+
+end
+
 function generate_joint_trajectory(
     robot::AbstractRobotManipulator,
     path_speed::Vector{Vector{Float64}},
     time_step::Float64,
 )::TrajectoryResult
     error("generate_joint_trajectory not implemented for robot type $(typeof(robot))")
+end
+
+function generate_joint_trajectory(
+    robot::SerialManipulator,
+    path_speed::Vector{Vector{Float64}},
+    time_step::Float64,
+)::TrajectoryResult
+
 end
 
 end # module
