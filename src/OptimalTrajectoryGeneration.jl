@@ -16,6 +16,8 @@ export
     TrajectoryConstraints,
     JointTrajectory,
     TrajectoryResult,
+    spatial_inertia,
+    SerialManipulator,
 
     forward_kinematics,
     inverse_kinematics,
@@ -74,14 +76,24 @@ function spatial_inertia(
     com::SVector{3},
     inertia_com::SMatrix{3,3}
 )
-    I3 = I(3)
+    I3 = one(SMatrix{3,3,Float64})
     S = skew(com)
-    @SMatrix [
-        inertia_com + mass * S * S'    mass * S;
-        mass * S'                      mass * I3
+    
+    # Создаем блоки
+    A11 = inertia_com + mass * S * S'
+    A12 = mass * S
+    A21 = mass * S'
+    A22 = mass * I3
+    
+    return [
+        A11[1,1] A11[1,2] A11[1,3] A12[1,1] A12[1,2] A12[1,3];
+        A11[2,1] A11[2,2] A11[2,3] A12[2,1] A12[2,2] A12[2,3];
+        A11[3,1] A11[3,2] A11[3,3] A12[3,1] A12[3,2] A12[3,3];
+        A21[1,1] A21[1,2] A21[1,3] A22[1,1] A22[1,2] A22[1,3];
+        A21[2,1] A21[2,2] A21[2,3] A22[2,1] A22[2,2] A22[2,3];
+        A21[3,1] A21[3,2] A21[3,3] A22[3,1] A22[3,2] A22[3,3]
     ]
 end
-
 # Rigid body & robot definition (URDF-style)
 """
 Rigid body with screw axis and spatial inertia.
