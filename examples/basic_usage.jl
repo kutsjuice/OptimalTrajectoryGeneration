@@ -15,7 +15,7 @@ d3_limit = 0.2
 
 screw1 = @SVector [0., 0., 1.,  0., 0., 0.]
 screw2 = @SVector [0., 0., 1., -l1, 0., 0.]
-screw3 = @SVector [0., 0., 0.,  0., 0., 1.]
+screw3 = @SVector [0., 0., 0., 0.0, 0., 1.]
 screw4 = @SVector [0., 0., 1.,  0., 0., 0.]
 
 X1 = one(SMatrix{4,4,Float64})
@@ -71,6 +71,21 @@ cartesian_path = Base.invokelatest(OptimalTrajectoryGeneration.BezierCartesianPa
     control2,
     end_point
 )
+
+q_test = [-0.7, 1.4, 0.1, -0.7]
+T = OptimalTrajectoryGeneration.forward_kinematics(SCARA, q_test)
+println("FK result:\n", T)
+println("Position:", T[1:3,4])
+
+println("\nTesting inverse kinematics...")
+q_target = [-0.5, 1.0, 0.15, 0.0]
+T_target = OptimalTrajectoryGeneration.forward_kinematics(SCARA, q_target)
+println("Target pose position:", T_target[1:3,4])
+
+q_ik = OptimalTrajectoryGeneration.inverse_kinematics(SCARA, T_target, q_test)
+println("IK result:", q_ik)
+println("FK of IK result:", OptimalTrajectoryGeneration.forward_kinematics(SCARA, q_ik)[1:3,4])
+println("Error:", norm(q_ik - q_target))
 
 q_seed = [-0.7, 1.4, 0.1, -0.7]
 

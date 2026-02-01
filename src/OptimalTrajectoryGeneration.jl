@@ -312,7 +312,7 @@ function forward_kinematics(
 
     T = one(SMatrix{4,4,Float64})
     for i in 1:robot.dof
-        T = T * robot.links[i].X_parent * exp_twist(robot.links[i].screw_axis, q[i])
+        T = robot.links[i].X_parent * exp_twist(robot.links[i].screw_axis, q[i]) * T
     end
     return T
 end
@@ -335,20 +335,48 @@ function inverse_kinematics(
     target_T::SMatrix{4,4,Float64},    
     q0::Vector{Float64}=zeros(robot.dof);
     tolerance=1e-8,
-    max_iterations=500
+    max_iterations=500,
+    damping_factor=1e-6
 )
     q = copy(q0)
-    for _ in 1:max_iterations
+    λ = damping_factor
+    last_error_norm = Inf
+    for iter in 1:max_iterations
         T = forward_kinematics(robot, q)
         T_err = inv_se3(T) * target_T
-        e = log_se3(T_err)        
-        if norm(e) < tolerance
+        e = log_se3(T_err)
+        error_norm = norm(e)
+        if error_norm < tolerance
             return q
         end
+        if iter > 1 && error_norm > last_error_norm * 1.1
+            @warn "IK diverging at iteration $iter: error increased from $last_error_norm to $error_norm"
+            break
+        end
+        last_error_norm = error_norm
         J = jacobian(robot, q)
-        q += pinv(J) * e
+        n = size(J, 2)
+        JTJ = J' * J
+        DLS_matrix = JTJ + λ^2 * Matrix{Float64}(I, n, n)
+        Δq = DLS_matrix \ (J' * e) 
+        step_norm = norm(Δq)
+        α = min(1.0, 0.5 / max(step_norm, 1e-10))
+        q += α * Δq
+        
+        for i in 1:length(q)
+            while q[i] > π
+                q[i] -= 2π
+            end
+            while q[i] < -π
+                q[i] += 2π
+            end
+        end
+        if iter % 50 == 0 && λ > 1e-8
+            λ *= 0.5
+        end
     end
-    error("IK did not converge")
+        @warn "IK did not fully converge after $max_iterations iterations. Final error: $last_error_norm"
+    return q
 end
 
 """
