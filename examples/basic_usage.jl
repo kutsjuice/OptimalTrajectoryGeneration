@@ -72,31 +72,22 @@ cartesian_path = Base.invokelatest(OptimalTrajectoryGeneration.BezierCartesianPa
     end_point
 )
 
-q_seed = [0.0, atan(0.0/0.5), 0.1, 0.0]
+q_seed = [-0.7, 1.4, 0.1, -0.7]
+
 joint_path = Base.invokelatest(OptimalTrajectoryGeneration.joint_path_from_cartesian_bezier,
-    SCARA,
-    cartesian_path,
-    q_seed
-)
+    SCARA, cartesian_path, q_seed)
 
 constraints = Base.invokelatest(OptimalTrajectoryGeneration.TrajectoryConstraints,
     [2.0, 2.0, 0.5, 3.0],
     [5.0, 5.0, 1.0, 8.0],
     [50.0, 30.0, 20.0, 10.0],
     [100.0, 100.0, 20.0, 50.0],
-    ([-π, -π, 0.0, -π], [π, π, d3_limit, π])
-)
+    ([-π, -π, 0.0, -π], [π, π, d3_limit, π]))
 
 path_speed = Base.invokelatest(compute_limit_path_speed,
-    SCARA,
-    joint_path,
-    constraints
-)
+    SCARA, joint_path, constraints)
 
 time_step = 0.01
+
 trajectory_result = Base.invokelatest(generate_joint_trajectory,
-    SCARA,
-    joint_path,
-    path_speed,
-    time_step
-)
+    SCARA, joint_path, path_speed, time_step)

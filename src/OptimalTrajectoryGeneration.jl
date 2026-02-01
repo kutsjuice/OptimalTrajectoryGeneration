@@ -231,10 +231,28 @@ function log_se3(T::SMatrix{4,4,Float64})
     else
         cos_theta = (trR - 1) / 2
         theta = acos(clamp(cos_theta, -1.0, 1.0))
-        
-        if theta < 1e-6
-            omega = SVector{3,Float64}(0.0, 0.0, 0.0)
-            v = p
+        sin_theta = sin(theta)
+        if abs(sin_theta) < 1e-6
+            if theta < 0.1
+                omega = SVector{3,Float64}(0.0, 0.0, 0.0)
+                v = p
+            else  # theta ≈ π
+                diag_part = [(R[1,1] + 1)/2, (R[2,2] + 1)/2, (R[3,3] + 1)/2]
+                diag_part = max.(diag_part, 0.0)
+                i = argmax(diag_part)
+                n = zeros(SVector{3,Float64})
+                n = setindex(n, sqrt(diag_part[i]), i)
+                if n[i] > 1e-6
+                    for j in 1:3
+                        if j != i
+                            n = setindex(n, R[i,j] / (2 * n[i]), j)
+                        end
+                    end
+                end
+                n = n / norm(n)
+                omega = π * n
+                theta = π
+            end
         else
             omega_skew = (R - R') / (2 * sin(theta))
             omega = SVector{3,Float64}(
