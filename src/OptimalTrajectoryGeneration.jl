@@ -4,6 +4,7 @@ using LinearAlgebra
 using StaticArrays
 using ForwardDiff
 using Statistics
+using DocStringExtensions
 
 export
     AbstractRobotManipulator,
@@ -203,9 +204,14 @@ function inverse_se3(T::SMatrix{4,4,Float64})
     R = T[1:3, 1:3]
     p = T[1:3, 3:4]
 
-    @SMatrix[
-        R' (-R' * p);
-        0.0 0.0 0.0 1.0
+    R_inv = R'
+    p_inv = -R_inv * p  
+
+    @SMatrix [
+        R_inv[1,1] R_inv[1,2] R_inv[1,3] p_inv[1];
+        R_inv[2,1] R_inv[2,2] R_inv[2,3] p_inv[2];
+        R_inv[3,1] R_inv[3,2] R_inv[3,3] p_inv[3];
+        0.0        0.0        0.0        1.0
     ]
 end
 
@@ -215,19 +221,26 @@ function log_se3(T::SMatrix{4,4,Float64})
     R = T[1:3,1:3]
     p = T[1:3,4]
     trR = tr(R)
+    
     if abs(trR - 3) < 1e-6
-        omega = @SVector zeros(3)
+        omega = SVector{3,Float64}(0.0, 0.0, 0.0)
         v = p
     else
         cos_theta = (trR - 1) / 2
         theta = acos(clamp(cos_theta, -1.0, 1.0))
+        
         if theta < 1e-6
-            omega = @SVector zeros(3)
+            omega = SVector{3,Float64}(0.0, 0.0, 0.0)
             v = p
         else
             omega_skew = (R - R') / (2 * sin(theta))
-            omega = @SVector [omega_skew[3,2], omega_skew[1,3], omega_skew[2,1]] * theta
-            omega_hat = skew(omega / theta)  # normalized
+            omega = SVector{3,Float64}(
+                omega_skew[3,2], 
+                omega_skew[1,3], 
+                omega_skew[2,1]
+            ) * theta
+            
+            omega_hat = skew(omega / theta)
             if abs(theta) > pi - 1e-2
                 theta = theta - 2*pi * sign(theta - pi)
             end
@@ -238,16 +251,22 @@ function log_se3(T::SMatrix{4,4,Float64})
             v = inv_J * p
         end
     end
-    @SVector [omega[1], omega[2], omega[3], v[1], v[2], v[3]]
+
+    return SVector{6,Float64}(omega[1], omega[2], omega[3], v[1], v[2], v[3])
 end
 
 function inv_se3(T::SMatrix{4,4,Float64})
     R = T[1:3, 1:3]
     p = T[1:3, 4]
-    return @SMatrix [
-        R'  -R' * p;
-        0   0   0   1
-    ]
+    R_inv = R'
+    p_inv = -R_inv * p
+
+    return SMatrix{4,4,Float64,16}(
+        R_inv[1,1], R_inv[1,2], R_inv[1,3], p_inv[1],
+        R_inv[2,1], R_inv[2,2], R_inv[2,3], p_inv[2],
+        R_inv[3,1], R_inv[3,2], R_inv[3,3], p_inv[3],
+        0.0,        0.0,        0.0,        1.0
+    )
 end
 
 function forward_kinematics(
@@ -269,7 +288,7 @@ Returns end-effector position.
 function forward_kinematics(
     robot::SerialManipulator,
     q::Vector{Float64}
-)::SVector{3,Float64}
+)::SMatrix{4,4,Float64,16}
 
     T = SMatrix{4,4}(I)
     for i in 1:robot.dof
@@ -301,7 +320,9 @@ function inverse_kinematics(
 )
     q = copy(q0)
     for _ in 1:max_iterations
-        e = target - forward_kinematics(robot, q)
+        T = forward_kinematics(robot, q)
+        T_err = inv_se3(T) * target_T
+        e = log_se3(T_err)        
         if norm(e) < tolerance
             return q
         end
@@ -325,7 +346,7 @@ function jacobian(
     robot::AbstractRobotManipulator,
     joint_positions::Vector{Float64}
 )::Matrix{Float64}
-    return ForwardDiff.jacobian(q -> forward_kinematics(robot, q), joint_positions)
+    ForwardDiff.jacobian(q -> forward_kinematics(robot, q)[1:3,4], joint_positions)
 end
 
 function jacobian(
@@ -336,12 +357,11 @@ function jacobian(
     J = Matrix{Float64}(undef, 6, n)
     Ad_cum = SMatrix{6,6,Float64}(I)
     for i = n:-1:1
-        J[:, i] = Vector(Ad_cum * robot.links[i].screw_axis)
+        J[:, i] = Ad_cum * robot.links[i].screw_axis
         X_twist = exp_twist(robot.links[i].screw_axis, q[i])
         X_fixed = robot.links[i].X_parent
         X = X_twist * X_fixed
-        Ad = adjoint(X[1:3,1:3], X[1:3,4])
-        Ad_cum = Ad * Ad_cum
+        Ad_cum = Ad_cum * adjoint(X[1:3,1:3], X[1:3,4])
     end
     J
 end
@@ -366,9 +386,9 @@ function newton_euler(
 )
     n = robot.dof
 
-    V = fill(@SVector zeros(6), n)
-    Vd = fill(@SVector zeros(6), n)
-    F = fill(@SVector zeros(6), n)
+    V  = fill(SVector{6,Float64}(zeros(6)), n)
+    Vd = fill(SVector{6,Float64}(zeros(6)), n)
+    F  = fill(SVector{6,Float64}(zeros(6)), n)
     g = @SVector [0.0, 0.0, 0.0,
               robot.gravity[1],
               robot.gravity[2],
@@ -403,7 +423,7 @@ function newton_euler(
 
         if i < n
             S_next = robot.links[i+1].screw_axis
-            X_twist = exp_twist(robot.links[i+1].screw_axis, q[i+1])
+            X_twist = exp_twist(S_next, q[i+1])
             X = X_twist * robot.links[i+1].X_parent
             X_inv = inv_se3(X)
             R_inv = X_inv[1:3,1:3]
@@ -524,7 +544,7 @@ function evaluate_path(
         p = u^3 *path.q0 + 3u^2*t * path.q1 + 3u*t^2 * path.q2 + t^3 * path.q3
         return p
     elseif derivative == 1
-        p = 3u^2 * (path.q1 - path.q0) + 6u*t * (path.q2 - path.q1) + 3t^2 * (path.q3 - path.q2)
+        p = 3u^2 * (path.q1 - path.q0) + 6u*t * (path.q2 - path.q1) + t^3 * (path.q3 - path.q2)
         return p
     elseif derivative == 2
         p = 6u * (path.q2 - 2path.q1 + path.q0) + 6t * (path.q3 - 2path.q2 +path.q1)
@@ -535,7 +555,7 @@ function evaluate_path(
 end
 
 function joint_path_from_cartesian_bezier(
-    robot,
+    robot::AbstractRobotManipulator,
     cartesian_path::BezierCartesianPath,
     q_seed::Vector{Float64}
 )::BezierJointPath
@@ -545,6 +565,7 @@ function joint_path_from_cartesian_bezier(
     q3 = inverse_kinematics(robot, evaluate_path(cartesian_path, 1.0), q2)
     return BezierJointPath(q0, q1, q2, q3)
 end
+
 """
 Compute limit path speed along the joint path given trajectory constraints.
 # Arguments
@@ -659,8 +680,7 @@ function generate_joint_trajectory(
     accelerations = zeros(Float64, dof, n_points)
     torques = zeros(Float64, dof, n_points)
     
-    # Create interpolation function for theta(t)
-    # Simple linear interpolation for now
+    # Simple linear interpolation for theta(t) for now
     function theta_of_t(t)
         idx = searchsortedlast(time, t)
         if idx == 0
@@ -697,7 +717,7 @@ function generate_joint_trajectory(
         if idx_t == 1
             dθ_dt = (θ2 - θ1) / dt1
         elseif idx_t >= N-1
-            dθ_dt = (θ2 - θ1) / dt1
+            dθ_dt = (θ2 - θ1) / dt
         else
             dθ_dt = (θ3 - θ1) / (dt1 + dt2)
         end
