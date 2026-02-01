@@ -312,8 +312,7 @@ function forward_kinematics(
 
     T = one(SMatrix{4,4,Float64})
     for i in 1:robot.dof
-        T *= robot.links[i].X_parent
-        T *= exp_twist(robot.links[i].screw_axis, q[i])
+        T = T * robot.links[i].X_parent * exp_twist(robot.links[i].screw_axis, q[i])
     end
     return T
 end
@@ -377,8 +376,8 @@ function jacobian(
     J = Matrix{Float64}(undef, 6, n)
     Ad_cum = one(SMatrix{6,6,Float64})
     for i = n:-1:1
-        J[:, i] = Ad_cum * robot.links[i].screw_axis
         X = robot.links[i].X_parent * exp_twist(robot.links[i].screw_axis, q[i])
+        J[:, i] = Ad_cum * robot.links[i].screw_axis
         Ad_cum = Ad_cum * adjoint(X[1:3,1:3], X[1:3,4])
     end
     J
