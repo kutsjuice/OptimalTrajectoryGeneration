@@ -307,8 +307,7 @@ function forward_kinematics(
         T *= exp_twist(robot.links[i].screw_axis, q[i])
         T *= robot.links[i].X_parent
     end
-
-    T
+    return T
 end
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
@@ -325,7 +324,7 @@ Compute inverse kinematics mapping end-effector pose to joint positions.
 """
 function inverse_kinematics(
     robot::SerialManipulator,
-    target::Vector{Float64},
+    target_T::SMatrix{4,4,Float64},    
     q0::Vector{Float64}=zeros(robot.dof);
     tolerance=1e-6,
     max_iterations=100
@@ -498,6 +497,18 @@ struct BezierCartesianPath <: AbstractCartesianPath
     p3:: SVector{3, Float64}
 end
 
+struct BezierQuaternionPath
+    q0::SVector{4,Float64}
+    q1::SVector{4,Float64}
+    q2::SVector{4,Float64}
+    q3::SVector{4,Float64}
+end
+
+struct BezierSE3Path
+    pos_path::BezierCartesianPath
+    quat_path::BezierQuaternionPath
+end
+
 """
 Evaluate point on path at parameter t ∈ [0, 1].
 
@@ -518,7 +529,7 @@ function evaluate_path(path::BezierCartesianPath, t::Float64)::Vector{Float64}
     u = 1.0 - t
     p = u^3 *path.p0 + 3u^2*t * path.p1 + 3u*t^2 * path.p2 + t^3 * path.p3
 
-    return Vector(p)
+    return p
 end
 
 
@@ -566,15 +577,40 @@ function evaluate_path(
     end
 end
 
+function quat_to_rot(q::SVector{4,Float64})
+    w, x, y, z = q
+
+    @SMatrix [
+        1-2y^2-2z^2    2x y - 2 w z    2x z + 2 w y;
+        2x y + 2 w z   1-2x^2-2z^2     2y z - 2 w x;
+        2x z - 2 w y   2y z + 2 w x    1-2x^2-2y^2
+    ]
+end
+
 function joint_path_from_cartesian_bezier(
     robot::AbstractRobotManipulator,
     cartesian_path::BezierCartesianPath,
     q_seed::Vector{Float64}
 )::BezierJointPath
-    q0 = inverse_kinematics(robot, evaluate_path(cartesian_path, 0.0), q_seed)
-    q1 = inverse_kinematics(robot, evaluate_path(cartesian_path, 1/3), q0)
-    q2 = inverse_kinematics(robot, evaluate_path(cartesian_path, 2/3), q1)
-    q3 = inverse_kinematics(robot, evaluate_path(cartesian_path, 1.0), q2)
+    
+    default_quat = @SVector [1.0, 0.0, 0.0, 0.0]  # w,x,y,z
+
+    function make_full_pose(pos_vec)
+        pos = SVector{3,Float64}(pos_vec)
+        R = quat_to_rot(default_quat)
+        @SMatrix [
+            R[1,1] R[1,2] R[1,3] pos[1];
+            R[2,1] R[2,2] R[2,3] pos[2];
+            R[3,1] R[3,2] R[3,3] pos[3];
+            0.0    0.0    0.0    1.0
+        ]
+    end
+
+    q0 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 0.0)), q_seed)
+    q1 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1/3  )), q0)
+    q2 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 2/3  )), q1)
+    q3 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1.0  )), q2)
+
     return BezierJointPath(q0, q1, q2, q3)
 end
 
