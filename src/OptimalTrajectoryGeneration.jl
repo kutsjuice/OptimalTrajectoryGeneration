@@ -4,7 +4,6 @@ using LinearAlgebra
 using StaticArrays
 using ForwardDiff
 using Statistics
-using DocStringExtensions
 
 export
     AbstractRobotManipulator,
@@ -40,26 +39,29 @@ abstract type AbstractLink end
 """
 Skew-symmetric matrix for cross product.
 """
-skew(v::SVector{3,Float64}) = @SMatrix [
-    0.0 -v[3]  v[2];
-    v[3]  0.0 -v[1];
-   -v[2]  v[1]  0.0
-]
-
-"""
-Adjoint transformation matrix for SE(3).
-"""
-function adjoint(R::SMatrix{3,3}, p::SVector{3})
+skew(v) = let w = SVector{3}(v)
     @SMatrix [
-        R               zeros(3,3);
-        skew(p) * R     R
+         0.0  -w[3]   w[2]
+         w[3]  0.0   -w[1]
+        -w[2]  w[1]   0.0
     ]
 end
 
 """
+Adjoint transformation matrix for SE(3).
+"""
+function adjoint(R::SMatrix{3,3,Float64}, p::SVector{3,Float64})
+    [  R          zero(SMatrix{3,3,Float64})
+      skew(p)*R   R                       ]
+end
+
+adjoint(R::AbstractMatrix, p::AbstractVector) = 
+    adjoint(SMatrix{3,3,Float64}(R), SVector{3,Float64}(p))
+
+"""
 Spatial cross product operator for motion vectors.
 """
-function ad(V::SVector{6})
+function ad(V::SVector{6,Float64})
     ω = V[1:3]
     v = V[4:6]
     @SMatrix [
@@ -73,35 +75,36 @@ Spatial inertia matrix.
 """
 function spatial_inertia(
     mass::Float64,
-    com::SVector{3},
-    inertia_com::SMatrix{3,3}
+    com::SVector{3,Float64},
+    inertia_com::SMatrix{3,3,Float64}
 )
     I3 = one(SMatrix{3,3,Float64})
     S = skew(com)
     
-    # Создаем блоки
     A11 = inertia_com + mass * S * S'
     A12 = mass * S
     A21 = mass * S'
     A22 = mass * I3
     
-    return [
-        A11[1,1] A11[1,2] A11[1,3] A12[1,1] A12[1,2] A12[1,3];
-        A11[2,1] A11[2,2] A11[2,3] A12[2,1] A12[2,2] A12[2,3];
-        A11[3,1] A11[3,2] A11[3,3] A12[3,1] A12[3,2] A12[3,3];
-        A21[1,1] A21[1,2] A21[1,3] A22[1,1] A22[1,2] A22[1,3];
-        A21[2,1] A21[2,2] A21[2,3] A22[2,1] A22[2,2] A22[2,3];
-        A21[3,1] A21[3,2] A21[3,3] A22[3,1] A22[3,2] A22[3,3]
-    ]
+    # Correct SMatrix constructor syntax
+    return SMatrix{6,6,Float64}(
+        A11[1,1], A11[1,2], A11[1,3], A12[1,1], A12[1,2], A12[1,3],
+        A11[2,1], A11[2,2], A11[2,3], A12[2,1], A12[2,2], A12[2,3],
+        A11[3,1], A11[3,2], A11[3,3], A12[3,1], A12[3,2], A12[3,3],
+        A21[1,1], A21[1,2], A21[1,3], A22[1,1], A22[1,2], A22[1,3],
+        A21[2,1], A21[2,2], A21[2,3], A22[2,1], A22[2,2], A22[2,3],
+        A21[3,1], A21[3,2], A21[3,3], A22[3,1], A22[3,2], A22[3,3]
+    )
 end
+
 # Rigid body & robot definition (URDF-style)
 """
 Rigid body with screw axis and spatial inertia.
 """
 struct RigidBody <: AbstractLink
     screw_axis::SVector{6,Float64}          # Body screw axis
-    X_parent::SMatrix{4,4,Float64,16}       # Transform to parent at zero config
-    inertia::SMatrix{6,6,Float64,36}        # Spatial inertia
+    X_parent::SMatrix{4,4,Float64}          # Transform to parent at zero config
+    inertia::SMatrix{6,6,Float64}           # Spatial inertia
 end
 
 """
@@ -177,44 +180,32 @@ struct TrajectoryResult
 end
 
 """
-Compute forward kinematics mapping joint positions to end-effector pose.
-
-# Arguments
-- `robot::AbstractRobotManipulator`: Robot instance
-- `joint_positions::Vector{Float64}`: Joint positions
-- `initial_guess::Vector{Float64}`: Initial pose guess
-- `tolerance::Float64=1e-6`: Solution tolerance
-- `max_iterations::Int=100`: Maximum iterations
-
-# Returns
-- `Vector{Float64}`: Cartesian pose [x, y, z, ...]
-"""
-
-"""
 Matrix exponential for a screw axis.
 """
-function exp_twist(S::SVector{6}, θ::Float64)
+function exp_twist(S::SVector{6,Float64}, θ::Float64)
     ω = S[1:3]
     v = S[4:6]
 
     if norm(ω) < 1e-8
-        R = I(3)
+        R = one(SMatrix{3,3,Float64})
         p = v * θ
     else
         ω̂ = skew(ω)
-        R = I(3) + sin(θ)*ω̂ + (1-cos(θ))*(ω̂*ω̂)
-        p = (I(3)*θ + (1-cos(θ))*ω̂ + (θ-sin(θ))*(ω̂*ω̂)) * v
+        R = one(SMatrix{3,3,Float64}) + sin(θ)*ω̂ + (1-cos(θ))*(ω̂*ω̂)
+        p = (one(SMatrix{3,3,Float64})*θ + (1-cos(θ))*ω̂ + (θ-sin(θ))*(ω̂*ω̂)) * v
     end
 
     @SMatrix [
-        R  p;
-        0  1
+        R[1,1] R[1,2] R[1,3] p[1];
+        R[2,1] R[2,2] R[2,3] p[2];
+        R[3,1] R[3,2] R[3,3] p[3];
+        0.0    0.0    0.0    1.0
     ]
 end
 
 function inverse_se3(T::SMatrix{4,4,Float64})
     R = T[1:3, 1:3]
-    p = T[1:3, 3:4]
+    p = T[1:3, 4]
 
     R_inv = R'
     p_inv = -R_inv * p  
@@ -253,13 +244,13 @@ function log_se3(T::SMatrix{4,4,Float64})
             ) * theta
             
             omega_hat = skew(omega / theta)
-            if abs(theta) > pi - 1e-2
-                theta = theta - 2*pi * sign(theta - pi)
-            end
+            # if abs(theta) > pi - 1e-2
+            #     theta = theta - 2*pi * sign(theta - pi)
+            # end
             half_theta = theta / 2
             cot_half = cot(half_theta)
             coef = 1 - half_theta * cot_half
-            inv_J = I(3) - 0.5 * omega_hat + (coef / (theta^2)) * (omega_hat * omega_hat)
+            inv_J = one(SMatrix{3,3,Float64}) - 0.5 * omega_hat + (coef / (theta^2)) * (omega_hat * omega_hat)
             v = inv_J * p
         end
     end
@@ -273,7 +264,7 @@ function inv_se3(T::SMatrix{4,4,Float64})
     R_inv = R'
     p_inv = -R_inv * p
 
-    return SMatrix{4,4,Float64,16}(
+    return SMatrix{4,4,Float64}(
         R_inv[1,1], R_inv[1,2], R_inv[1,3], p_inv[1],
         R_inv[2,1], R_inv[2,2], R_inv[2,3], p_inv[2],
         R_inv[3,1], R_inv[3,2], R_inv[3,3], p_inv[3],
@@ -289,7 +280,6 @@ function forward_kinematics(
     max_iterations::Int=100)::Vector{Float64}
 
     error("forward_kinematics not implemented for robot type $(typeof(robot))")
-
 end
 
 
@@ -300,15 +290,16 @@ Returns end-effector position.
 function forward_kinematics(
     robot::SerialManipulator,
     q::Vector{Float64}
-)::SMatrix{4,4,Float64,16}
+)::SMatrix{4,4,Float64}
 
-    T = SMatrix{4,4}(I)
+    T = one(SMatrix{4,4,Float64})
     for i in 1:robot.dof
-        T *= exp_twist(robot.links[i].screw_axis, q[i])
         T *= robot.links[i].X_parent
+        T *= exp_twist(robot.links[i].screw_axis, q[i])
     end
     return T
 end
+
 """
 Compute inverse kinematics mapping end-effector pose to joint positions.
 
@@ -326,8 +317,8 @@ function inverse_kinematics(
     robot::SerialManipulator,
     target_T::SMatrix{4,4,Float64},    
     q0::Vector{Float64}=zeros(robot.dof);
-    tolerance=1e-6,
-    max_iterations=100
+    tolerance=1e-8,
+    max_iterations=500
 )
     q = copy(q0)
     for _ in 1:max_iterations
@@ -366,12 +357,10 @@ function jacobian(
 )::Matrix{Float64}
     n = robot.dof
     J = Matrix{Float64}(undef, 6, n)
-    Ad_cum = SMatrix{6,6,Float64}(I)
+    Ad_cum = one(SMatrix{6,6,Float64})
     for i = n:-1:1
         J[:, i] = Ad_cum * robot.links[i].screw_axis
-        X_twist = exp_twist(robot.links[i].screw_axis, q[i])
-        X_fixed = robot.links[i].X_parent
-        X = X_twist * X_fixed
+        X = robot.links[i].X_parent * exp_twist(robot.links[i].screw_axis, q[i])
         Ad_cum = Ad_cum * adjoint(X[1:3,1:3], X[1:3,4])
     end
     J
