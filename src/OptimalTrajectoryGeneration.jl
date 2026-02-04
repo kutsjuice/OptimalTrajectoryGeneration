@@ -753,7 +753,7 @@ function generate_joint_trajectory(
     # Generate trajectory at specified time steps
     t_final = time[end]
     time_points = 0.0:time_step:t_final
-    n_points = length(time_points)
+     n_points = length(time_points)
     
     # Initialize result arrays
     dof = robot.dof
