@@ -423,61 +423,56 @@ Recursive Newton-Euler algorithm
 # Returns
 - `Vector{Float64}`: Generalized forces (torques/forces) at each joint
 """
-function newton_euler(
+using StaticArrays, LinearAlgebra
+
+function newton_euler_corrected(
     robot::SerialManipulator,
     q::Vector{Float64},
     qd::Vector{Float64},
     qdd::Vector{Float64}
 )
     n = robot.dof
+    gravity_spatial = @SVector [0.0, 0.0, 0.0,
+                                robot.gravity[1],
+                                robot.gravity[2],
+                                robot.gravity[3]]   
 
-    V  = fill(SVector{6,Float64}(zeros(6)), n)
-    Vd = fill(SVector{6,Float64}(zeros(6)), n)
-    F  = fill(SVector{6,Float64}(zeros(6)), n)
-    g = @SVector [0.0, 0.0, 0.0,
-              robot.gravity[1],
-              robot.gravity[2],
-              robot.gravity[3]]
+    V  = Vector{SVector{6,Float64}}(undef, n)
+    Vd = Vector{SVector{6,Float64}}(undef, n)
+    F  = Vector{SVector{6,Float64}}(undef, n)
+    X_rel = Vector{SMatrix{4,4,Float64,16}}(undef, n)
+    Ad_X_rel = Vector{SMatrix{6,6,Float64,36}}(undef, n)
 
-    # Forward recursion
     for i in 1:n
         S = robot.links[i].screw_axis
-        X_twist = exp_twist(S, q[i])
-        X = X_twist * robot.links[i].X_parent
-        X_inv = inv_se3(X)
-        R_inv = X_inv[1:3,1:3]
-        p_inv = X_inv[1:3,4]
-        AdX = adjoint(R_inv, p_inv)
+        X_rel[i] = exp_twist(S, q[i]) * robot.links[i].X_parent
+        Ad_X_rel[i] = adjoint(X_rel[i][1:3,1:3], X_rel[i][1:3,4])
 
         if i == 1
-            V[i]  = S * qd[i]
-            Vd[i] = S * qdd[i] - g + ad(V[i]) * (S * qd[i])
+            V[i] = S * qd[i]
         else
-            AdX = adjoint(X[1:3,1:3], X[1:3,4])
-            V[i]  = AdX * V[i-1] + S * qd[i]
-            Vd[i] = AdX * Vd[i-1] + S * qdd[i] + ad(V[i]) * (S * qd[i])
+            V[i] = Ad_X_rel[i] * V[i-1] + S * qd[i]
+        end
+
+        if i == 1
+            Vd[i] = Ad_X_rel[i] * (-gravity_spatial) + S * qdd[i] + ad(V[i]) * (S * qd[i])
+        else
+            Vd[i] = Ad_X_rel[i] * Vd[i-1] + S * qdd[i] + ad(V[i]) * (S * qd[i])
         end
     end
 
     τ = zeros(n)
-
-    # Backward recursion
     for i in n:-1:1
         I = robot.links[i].inertia
         F[i] = I * Vd[i] + ad(V[i])' * (I * V[i])
 
         if i < n
-            S_next = robot.links[i+1].screw_axis
-            X_twist = exp_twist(S_next, q[i+1])
-            X = X_twist * robot.links[i+1].X_parent
-            X_inv = inv_se3(X)
-            R_inv = X_inv[1:3,1:3]
-            p_inv = X_inv[1:3,4]
-            AdX = adjoint(R_inv, p_inv)
-            F[i] += AdX' * F[i+1]
+            F[i] += Ad_X_rel[i+1]' * F[i+1]
         end
+
         τ[i] = dot(robot.links[i].screw_axis, F[i])
     end
+
     return τ
 end
 
