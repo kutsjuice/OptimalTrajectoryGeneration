@@ -399,45 +399,77 @@ function body_jacobian(model::Model, body::Int, q::Vector{Float64})
     return Jb
 end
 
-# Inverse kinematics (Newton method)
+# Forward kinematics - position only (end-effector)
+function fk_position(model::Model, q::Vector{Float64})::SVector{3,Float64}
+    X = forward_kinematics(model, q)
+    R = X[1:3,1:3]
+    p = unskew(X[4:6,1:3] * R')
+    return SVector{3,Float64}(p)
+end
+
+# Forward kinematics - full SE(3) (position + orientation error in 6D)
+function fk_full(model::Model, q::Vector{Float64})::Tuple{SVector{3,Float64}, SMatrix{3,3,Float64}}
+    X = forward_kinematics(model, q)
+    R = X[1:3,1:3]
+    p = unskew(X[4:6,1:3] * R')
+    return SVector{3,Float64}(p), R
+end
+
+# Orientation error (compact 3D representation: axis-angle)
+function orientation_error(R_target::SMatrix{3,3,Float64}, R_current::SMatrix{3,3,Float64})::SVector{3,Float64}
+    dR = R_target * R_current'
+    # Extract axis-angle from rotation matrix
+    θ = acos(clamp((tr(dR) - 1)/2, -1.0, 1.0))
+    if θ < 1e-6
+        return @SVector [0.0, 0.0, 0.0]
+    else
+        axis = @SVector [dR[3,2] - dR[2,3], dR[1,3] - dR[3,1], dR[2,1] - dR[1,2]] / (2 * sin(θ))
+        return θ * axis
+    end
+end
+
+# Jacobian - position and orientation (numerical, 6 x n)
+function jacobian_full(model::Model, q::Vector{Float64}, h::Float64=1e-8)::Matrix{Float64}
+    n = length(q)
+    J = zeros(6, n)
+    p0, R0 = fk_full(model, q)
+    for i in 1:n
+        q_plus = copy(q)
+        q_plus[i] += h
+        p_plus, R_plus = fk_full(model, q_plus)
+        J[1:3, i] = (p_plus - p0) / h
+        J[4:6, i] = orientation_error(R_plus, R0) / h
+    end
+    return J
+end
+
+# Inverse kinematics (Newton method - position + orientation)
 function inverse_kinematics(
     model::Model,
     target_pose::SMatrix{4,4,Float64},
-    initial_q::Vector{Float64};
-    max_iters::Int=500,
-    tol::Float64=1e-8,
-    damping_factor::Float64=1e-6,
-    verbose::Bool=false
-)
-    q = copy(initial_q)
-    body = model.N
-    X_target = to_plucker(target_pose)
-    I6 = Matrix{Float64}(I, 6, 6)
-    for iter in 1:max_iters
-        X_current = forward_kinematics(model, q, body)
-        Jb = body_jacobian(model, body, q)            # 6 x n
-        dXb = X_target * spatial_inverse(X_current)
-        v = XtoV(dXb)
-        if norm(v) < tol
+    q0::Vector{Float64};
+    tol::Float64=1e-6,
+    max_iters::Int=100
+)::Vector{Float64}
+    target_pos = SVector{3,Float64}(target_pose[1:3, 4])
+    target_R = SMatrix{3,3,Float64}(target_pose[1:3, 1:3])
+    q = copy(q0)
+    for _ in 1:max_iters
+        p, R = fk_full(model, q)
+        err_pos = p - target_pos
+        err_orient = orientation_error(target_R, R)
+        err = [err_pos; err_orient]
+        if norm(err) < tol
             return q
         end
-        v_vec = Float64.(v)
-        In = Matrix{Float64}(I, length(q), length(q))
-        # Standard damped least-squares in joint space: (J'J + λ^2 I) Δq = J' v
-        lhs = Jb' * Jb + (damping_factor^2) * In
-        rhs = Jb' * v_vec
-        delta_q = lhs \ rhs
-        # limit step size to improve stability
-        if norm(delta_q) > 0.5
-            delta_q .= delta_q .* (0.5 / norm(delta_q))
-        end
-        q += delta_q
-        if verbose && (iter % 50 == 0)
-            @info "IK iter=$iter, ||v||=$(norm(v)), ||Δq||=$(norm(delta_q))"
+        J = jacobian_full(model, q)
+        try
+            q -= J \ err
+        catch
+            return fill(NaN, length(q0))
         end
     end
-    # Return best solution reached (SCARA is often underactuated for arbitrary SE(3) tasks)
-    q
+    return fill(NaN, length(q0))
 end
 
 function generate_joint_trajectory(
