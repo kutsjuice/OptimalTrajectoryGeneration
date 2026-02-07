@@ -68,6 +68,44 @@ struct BezierJointPath <: AbstractJointPath
 end
 
 # ============================================================================
+# BEZIER PATH CONSTRUCTORS WITH AUTOMATIC WAYPOINT GENERATION
+# ============================================================================
+
+"""
+    BezierCartesianPath(start::Vector{Float64}, p_end::Vector{Float64})
+
+Create a cubic Bézier Cartesian path by automatically generating intermediate 
+control points using linear interpolation. This simplifies the API - the user 
+only needs to specify start and end points.
+
+The intermediate control points are placed at t=1/3 and t=2/3 along the 
+straight line from start to end, resulting in a path that approximates 
+a straight line.
+"""
+function BezierCartesianPath(start::Vector{Float64}, p_end::Vector{Float64})
+    p0 = SVector{3,Float64}(start)
+    p3 = SVector{3,Float64}(p_end)
+    p1 = SVector{3,Float64}(start .+ (1/3) .* (p_end .- start))
+    p2 = SVector{3,Float64}(start .+ (2/3) .* (p_end .- start))
+    return BezierCartesianPath(p0, p1, p2, p3)
+end
+
+"""
+    BezierJointPath(start::Vector{Float64}, q_end::Vector{Float64})
+
+Create a cubic Bézier joint path by automatically generating intermediate 
+control points using linear interpolation. The user only specifies start 
+and end joint configurations.
+"""
+function BezierJointPath(start::Vector{Float64}, q_end::Vector{Float64})
+    q0 = start
+    q3 = q_end
+    q1 = start .+ (1/3) .* (q_end .- start)
+    q2 = start .+ (2/3) .* (q_end .- start)
+    return BezierJointPath(q0, q1, q2, q3)
+end
+
+# ============================================================================
 # BEZIER PATH EVALUATION
 # ============================================================================
 

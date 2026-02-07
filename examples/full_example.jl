@@ -95,12 +95,22 @@ println("\nCartesian path specification:")
 println("  Start point: [0.55, 0.0, 0.05]")
 println("  End point:   [0.30, 0.25, 0.05]")
 
+# Method 1: Simple - just specify start and end points!
+path_cart = BezierCartesianPath(
+    [0.55, 0.0,  0.05],  # start point
+    [0.30, 0.25, 0.05]   # end point
+)
+# Intermediate control points are generated automatically via linear interpolation
+
+# Method 2: Advanced - if you need custom intermediate points:
+#=
 path_cart = BezierCartesianPath(
     SVector{3,Float64}(0.55, 0.0,  0.05),   # t=0.0
     SVector{3,Float64}(0.50, 0.08, 0.05),   # t=1/3
     SVector{3,Float64}(0.40, 0.18, 0.05),   # t=2/3
     SVector{3,Float64}(0.30, 0.25, 0.05)    # t=1.0
 )
+=#
 
 q_seed = [0.0, 0.0, 0.0]
 
