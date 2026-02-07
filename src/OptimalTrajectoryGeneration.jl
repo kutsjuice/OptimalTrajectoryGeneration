@@ -385,7 +385,6 @@ Recursive Newton-Euler algorithm
 # Returns
 - `Vector{Float64}`: Generalized forces (torques/forces) at each joint
 """
-using StaticArrays, LinearAlgebra
 
 function newton_euler_corrected(
     robot::SerialManipulator,
@@ -597,10 +596,14 @@ function joint_path_from_cartesian_bezier(
         ]
     end
 
-    q0 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 0.0)), q_seed)
-    q1 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1/3  )), q0)
-    q2 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 2/3  )), q1)
-    q3 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1.0  )), q2)
+    q0 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 0.0)), q_seed;
+        max_iters=1000, damping_factor=0.01, tol=1e-4, verbose=false)
+    q1 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1/3  )), q0;
+        max_iters=1000, damping_factor=0.01, tol=1e-4, verbose=false)
+    q2 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 2/3  )), q1;
+        max_iters=1000, damping_factor=0.01, tol=1e-4, verbose=false)
+    q3 = inverse_kinematics(robot, make_full_pose(evaluate_path(cartesian_path, 1.0  )), q2;
+        max_iters=1000, damping_factor=0.01, tol=1e-4, verbose=false)
 
     return BezierJointPath(q0, q1, q2, q3)
 end
