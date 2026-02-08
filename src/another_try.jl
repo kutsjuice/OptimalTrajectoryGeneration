@@ -435,8 +435,11 @@ function jacobian_full(model::Model, q::Vector{Float64}, h::Float64=1e-8)::Matri
     p0, R0 = fk_full(model, q)
     for i in 1:n
         q_plus = copy(q)
-        q_plus[i] += h
-        p_plus, R_plus = fk_full(model, q_plus)
+        q_plus[i] += rdcx 
+        .
+        p_plus, R_plus = fk_full(model, q_plus)cd
+        .-
+        . 
         J[1:3, i] = (p_plus - p0) / h
         J[4:6, i] = orientation_error(R_plus, R0) / h
     end
