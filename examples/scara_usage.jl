@@ -64,11 +64,11 @@ function make_bezier(
     return BezierCurve(P)
 end
 
-function cartesian_traj(curve::BezierCurve, theta::AbstractVector)
+function cartesian_traj(curve::BezierCurve, theta::AbstractVector, robot::TestRobot)
     # Evaluate Bezier curve at parameter values theta
     P = curve.control_points
     num_points = length(theta)
-    trajectory = zeros(num_points, 2)
+    trajectory = zeros(num_points, robot.dof)
     
     for i in 1:num_points
         t = theta[i]
@@ -130,6 +130,13 @@ function joint_traj(
         joint_trajectory[i, :] = ik(robot, target, initial_guess, verbose=false)
     end
     return joint_trajectory
+end
+
+function time_parametrise(
+    theta,
+    theta_dot_max
+)
+
 end
 
 
