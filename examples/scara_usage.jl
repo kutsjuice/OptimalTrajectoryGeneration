@@ -2,6 +2,7 @@ using ForwardDiff
 using LinearAlgebra
 using Plots
 using Interpolations
+using Polynomials
 
 abstract type AbstractRobotManipulator end
 
@@ -133,10 +134,32 @@ function joint_traj(
 end
 
 function time_parametrise(
-    theta,
-    theta_dot_max
+    theta::AbstractVector,
+    theta_dot_max::AbstractVector
 )
-
+    idx = vcat[1:50:length(theta), length(theta)]
+    knots = copy(theta_dot_max)
+    knots[0] = knots[end] = 0.0
+    itp = interpolate(y, BSpline(Akima(Line(OnGrid()))))
+    vel_prof = zeros(T, n)
+    if isapprox(diff(theta[idx]), fill(mean(diff(theta[idx])), length(idx)-1), rtol=1e-6)
+        for i in 1:length(theta)
+            scaled_idx = 1 + (i-1) * (length(idx) - 1) / (n - 1)
+            vel_prof[i] = itp(scaled_idx)
+        end
+    else
+        itp = linear_interpolation(theta[idx], knots)
+        vel_prof = itp.(theta)
+    end
+    h = theta[1] - theta[0]
+    time = zeros(T, n)
+    time[2:end-1] = cumsum(h./vel_prof[2:end-1])
+    if n >= 5
+        idx_fit = (n-3):(n-1)
+        p = fit(theta[idx_fit], time[idx_fit], 2)
+        time[end] = p(theta[end])
+    end
+    return time, vel_prof
 end
 
 
