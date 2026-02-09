@@ -3,6 +3,7 @@ using LinearAlgebra
 using Plots
 using Interpolations
 using Polynomials
+using QuadGK
 
 abstract type AbstractRobotManipulator end
 
@@ -162,8 +163,20 @@ function time_parametrise(
     return time, vel_prof
 end
 
-
-
+function time_step(
+    ds::Float64,
+    v0::Float64,
+    a0::Float64,
+    a1::Float64
+    )
+    j = (a1 - a0) / ds
+    if abs(v0) < 1e-6
+        dt = sqrt(2ds / a0)
+    else
+        dt, error = quadgk(s -> 1/sqrt(v0^2 +2a0 * s + j * s^2), 0, 1)
+    end
+    dv = a0 * dt + (j * dt^2) / 2
+end 
 
 # Example usage
 robot = TestRobot(1.0, 0.5, 2)
