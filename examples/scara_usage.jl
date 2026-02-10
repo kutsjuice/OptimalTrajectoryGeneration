@@ -179,6 +179,23 @@ function time_step(
     return dt, dv
 end
 
+function time_step2(v0, v1)
+    return  abs((log(v1) - log(v1)) / (v1 - v0))
+end
+
+function velocity_limit(
+    theta,
+    d_psi_1_d_th,
+    d_psi_2_d_th,
+    w1_max,
+    w2_max
+)
+    j1_lim = abs(w1_max/d_psi_1_d_th(theta))
+    j2_lim = abs(w2_max/d_psi_2_d_th(theta))
+
+    return min(j1_lim, j2_lim)
+end
+
 # Example usage
 robot = TestRobot(1.0, 0.5, 2)
 q = [0.3, 0.2]
