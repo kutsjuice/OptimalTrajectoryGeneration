@@ -173,10 +173,11 @@ function time_step(
     if abs(v0) < 1e-6
         dt = sqrt(2ds / a0)
     else
-        dt, error = quadgk(s -> 1/sqrt(v0^2 +2a0 * s + j * s^2), 0, 1)
+        dt, error = quadgk(s -> 1/sqrt(v0^2 + 2a0 * s + j * s^2), 0, ds)
     end
     dv = a0 * dt + (j * dt^2) / 2
-end 
+    return dt, dv
+end
 
 # Example usage
 robot = TestRobot(1.0, 0.5, 2)
