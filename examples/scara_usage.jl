@@ -4,6 +4,7 @@ using Plots
 using Interpolations
 using Polynomials
 using QuadGK
+using Dierckx
 
 abstract type AbstractRobotManipulator end
 
@@ -163,6 +164,14 @@ function time_parametrise(
     return time, vel_prof
 end
 
+# def plot_joints_vs_time(time, jnt_traj):
+#     plt.plot(time, jnt_traj[:,0], label='q1(t)')
+#     plt.plot(time, jnt_traj[:,1], label='q2(t)')
+#     plt.legend(); plt.show()
+function plot_joints_vs_time(time, jnt_traj)
+    plot(time, [joint_traj[:, 0], joint_traj[:,1]], label=["q1(t)" "q2(t)"])
+end
+
 function time_step(
     ds::Float64,
     v0::Float64,
@@ -196,46 +205,77 @@ function velocity_limit(
     return min(j1_lim, j2_lim)
 end
 
+function acceleration_limits(
+    theta,
+    d_th_dt,
+    d_psi_1_d_th,
+    d_psi_2_d_th,
+    dd_psi_1_d_th2,
+    dd_psi_2_d_th2,
+    e1_max,
+    e2_max,
+    dtheta=1e-3
+)
+    if abs(d_th_dt) < 1e-6
+        return [
+            -e1_max / abs(dd_psi_1_d_th2(theta+dtheta/2) * dtheta * dtheta + d_psi_1_d_th(theta+dtheta/2) * dtheta),
+            e1_max / abs(dd_psi_1_d_th2(theta+dtheta/2) * dtheta * dtheta + d_psi_1_d_th(theta+dtheta/2) * dtheta)
+        ]
+    if (d_psi_1_d_th(theta) * d_th_dt > 0)
+        j1_lim = [
+            (- e1_max - dd_psi_1_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_1_d_th(theta) / d_th_dt,
+            (e1_max - dd_psi_1_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_1_d_th(theta) / d_th_dt
+        ]
+    else
+        j1_lim = [
+            (e1_max - dd_psi_1_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_1_d_th(theta) / d_th_dt,
+            (- e1_max - dd_psi_1_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_1_d_th(theta) / d_th_dt,
+        ]
+    if (d_psi_2_d_th(theta) * d_th_dt > 0)
+        j2_lim = [
+            (- e2_max - dd_psi_2_d_th2(theta)* d_th_dt * d_th_dt) / d_psi_2_d_th(theta) / d_th_dt,
+            (e2_max - dd_psi_2_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_2_d_th(theta) / d_th_dt,
+        ]
+    else
+        j2_lim = [
+            (e2_max - dd_psi_2_d_th2(theta) * d_th_dt * d_th_dt) / d_psi_2_d_th(theta) / d_th_dt,
+            (- e2_max - dd_psi_2_d_th2(theta)* d_th_dt * d_th_dt) / d_psi_2_d_th(theta) / d_th_dt,
+        ]
+    low_lim = max([
+        j1_lim[0],
+        j2_lim[0]
+    ])
+    upp_lim = min([
+        j1_lim[1],
+        j2_lim[1]
+    ])
+    return low_lim, upp_lim
+end
+
 # Example usage
-robot = TestRobot(1.0, 0.5, 2)
-q = [0.3, 0.2]
+L1 = 0.2
+l2 = 0.3
 
-end_effector_pos  = forward_kinematics(robot, q)
-J = body_jacobian(robot, q)
-println("Body jacobian:", J)
-ik_solution = ik(robot, [1.0, 0.5], [0.0, 0.0], verbose=true)
-println("IK solution:", ik_solution)
-println("End-effector position from IK solution:", forward_kinematics(robot, ik_solution))
+w1_max = w2_max = 335/360
+e1_max = e2_max = 2500
+q0 = [0.01, -0.02]
+testr = TestRobot(L1, L2, 2)
+p0 = forward_kinematics(
+    testr, q0
+)
 
-# Visualization
-theta = collect(0:0.01:1)
-bezier_curve = make_bezier([0.0, 0.0], [2.0, 1.5], 0.8)
-trajectory = cartesian_traj(bezier_curve, theta)
+for x_new in LinRange(p0[1], 0.65, 100)
+    q0 = ik(testr, [x_new, 0.0], q0)
+end
 
-P = bezier_curve.control_points
+p0 = forward_kinematics(testr, q0)
+p1 = [p0[2], p0[1]]
+k = 0.9
+curve = make_bezier(p0, p1, k*p0[0])
+N = 4001
+theta = LinRange(0, 1, N)
+cart_traj = cartesian_traj(curve, theta, testr)
+jnt_traj = joint_traj(cart_traj, testr)
+spl1 = Spline1D(theta, jnt_traj[:,0], k=3, s=0.0)
+spl1 = Spline1D(theta, jnt_traj[:,1], k=3, s=0.0)
 
-plot(trajectory[:, 1], trajectory[:, 2], 
-     label="Bezier Curve", linewidth=2, color=:blue,
-     xlabel="X", ylabel="Y", 
-     title="SCARA Robot Trajectory and Bezier Curve",
-     grid=true, legend=:topright)
-scatter!(P[1, :], P[2, :], label="Control Points", color=:red, markersize=6)
-scatter!([end_effector_pos[1]], [end_effector_pos[2]], label="Current EE", color=:green, markersize=8)
-scatter!([1.0], [0.5], label="IK Target", color=:orange, markersize=8)
-
-savefig("trajectory_visualization.png")
-println("Plot saved as trajectory_visualization.png")
-
-# Compute joint trajectory from cartesian trajectory
-println("\nComputing joint trajectory...")
-jnt_traj = joint_traj(trajectory, robot, ik_solution)
-
-# Analyze maximum velocities and accelerations
-println("\nAnalyzing trajectory constraints...")
-result = max_theta_dot(jnt_traj, theta, 1.5, 2.0)
-println("\nTrajectory Analysis Results:")
-println("Max velocity q1: $(result.max_vel_q1) rad/s")
-println("Max velocity q2: $(result.max_vel_q2) rad/s")
-println("Max acceleration q1: $(result.max_acc_q1) rad/s²")
-println("Max acceleration q2: $(result.max_acc_q2) rad/s²")
-println("Constraints satisfied (w1_max=1.5, w2_max=2.0): $(result.satisfies_constraints)")
