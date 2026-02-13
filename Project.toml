@@ -1,13 +1,19 @@
 name = "OptimalTrajectoryGeneration"
 uuid = "fea8e896-a1ec-43ab-b3f1-27ee766c5235"
-authors = ["Michael Kuts", "Yuriy Zasypkin"]
 version = "0.1.0"
+authors = ["Michael Kuts", "Yuriy Zasypkin"]
 
 [deps]
+Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Polynomials = "f27b6e38-b328-58d1-80ce-0feddd5e7a45"
+QuadGK = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
+Dierckx = "0.5.4"
+Polynomials = "4.1.0"
+QuadGK = "2.11.2"
 julia = "1.11"
 
 [extras]
