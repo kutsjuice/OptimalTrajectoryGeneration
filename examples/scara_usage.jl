@@ -275,7 +275,7 @@ curve = make_bezier(p0, p1, k*p0[0])
 N = 4001
 theta = LinRange(0, 1, N)
 cart_traj = cartesian_traj(curve, theta, testr)
-jnt_traj = joint_traj(cart_traj, testr)
+jnt_traj = joint_traj(cart_traj, testr, p0)
 spl1 = Spline1D(theta, jnt_traj[:,0], k=3, s=0.0)
 spl1 = Spline1D(theta, jnt_traj[:,1], k=3, s=0.0)
 
