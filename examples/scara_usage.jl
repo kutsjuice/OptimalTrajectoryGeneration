@@ -237,10 +237,10 @@ curve = make_bezier(p0, p1, k * p0[1])
 
 N = 4001
 theta = LinRange(0, 1, N)
+ds = theta[2] - theta[1]
 cart_traj = cartesian_traj(curve, theta, testr)
 jnt_traj = joint_traj(cart_traj, testr, q0)
 
-# Create splines
 spl1 = Spline1D(theta, jnt_traj[:, 1], k=3, s=0.0)
 spl2 = Spline1D(theta, jnt_traj[:, 2], k=3, s=0.0)
 
@@ -248,15 +248,34 @@ psi1 = theta -> spl1(theta)
 psi2 = theta -> spl2(theta)
 psi3 = theta -> -spl2(theta)/2
 
-d_psi1_dth = theta -> spl1(theta, 1)
-d_psi2_dth = theta -> spl2(theta, 1)
-d_psi3_dth = theta -> -spl2(theta, 1)/2
+d_psi1_dth = theta -> Dierckx.derivative(spl1, theta)
+d_psi2_dth = theta -> Dierckx.derivative(spl2, theta)
+d_psi3_dth = theta -> -Dierckx.derivative(spl2, theta)/2
 
-dd_psi1_dth2 = theta -> spl1(theta, 2)
-dd_psi2_dth2 = theta -> spl2(theta, 2)
-dd_psi3_dth2 = theta -> -spl2(theta, 2)/2
+dd_psi1_dth2 = theta -> Dierckx.derivative(spl1, theta, 2)
+dd_psi2_dth2 = theta -> Dierckx.derivative(spl2, theta, 2)
+dd_psi3_dth2 = theta -> -Dierckx.derivative(spl2, theta, 2)/2
 
-v_lim1 = abs.(w1_max ./ d_psi1_dth)
-v_lim2 = abs.(w2_max ./ d_psi2_dth)
+v_lim1 = [abs(w1_max / d_psi1_dth(t)) for t in theta]
+v_lim2 = [abs(w2_max / d_psi2_dth(t)) for t in theta]
 vel_profile = min.(v_lim1, v_lim2)
 
+time = zeros(length(theta))
+h = theta[2] - theta[1]
+
+for i in 2:length(theta)
+    if vel_profile[i] > 1e-10
+        time[i] = time[i-1] + h / vel_profile[i]
+    else
+        time[i] = time[i-1] + h / 1e-10
+    end
+end
+
+n = length(theta)
+if n >= 5
+    idx_fit = n-4:n
+    p = fit(theta[idx_fit], time[idx_fit], 2)
+    time[end] = p(theta[end])
+end
+
+display(plot(time, theta))
