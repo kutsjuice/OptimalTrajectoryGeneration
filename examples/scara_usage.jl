@@ -304,5 +304,18 @@ if n >= 5
     p = fit(theta[idx_fit], time[idx_fit], 2)
     time[end] = p(theta[end])
 end
-
 display(plot(time, theta, label="Theta vs Time", xlabel="Time (s)", ylabel="Theta"))
+theta_to_spline = Spline1D(time, theta, k=3, s=0.0)
+theta_to_t = t -> theta_to_spline(t)
+d_th_to_t = t -> Dierckx.derivative(theta_to_spline, t)
+dd_th_to_t2 = t -> Dierckx.derivative(theta_to_spline, t, 2)
+d_th_d_t_f = ones(N)*1000;   d_th_d_t_b = ones(N)*1000
+dd_th_d_t2_f = zeros(N);   dd_th_d_t2_b = zeros(N); dd_th_d_t2_a = zeros(N)
+t = zeros(N)
+torq_before_opt = zeros(N, 2)
+i = 0
+for i in 1:N
+    # ---------------- forward ----------------
+    # take the current theta and it's derivative
+    theta_cur, d_th_dt =   
+end
