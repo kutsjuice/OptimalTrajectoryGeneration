@@ -26,6 +26,22 @@ end
 function body_jacobian(robot::TestRobot, q::Vector{Float64})
     J = ForwardDiff.jacobian(q_vec -> forward_kinematics(robot, q_vec), q)
     return J
+
+    # q1 = q[1]
+    # q2 = q[2]
+
+    # s1  = sin(q1)
+    # s2  = sin(q1 + q2)
+    # s12 = sin(q1 + 0.5*q2)
+
+    # c1  = cos(q1)
+    # c2  = cos(q1 + q2)
+    # c12 = cos(q1 + 0.5*q2)
+
+    # return [
+    #     -robot.l1 * s1 - robot.l1 * s2 - robot.l2 * s12     -robot.l1 * s2 - 0.5*robot.l2*s12
+    #      robot.l1 * c1 + robot.l1 * c2 + robot.l2 * c12      robot.l1 * c2 + 0.5*robot.l2*c12
+    # ]
 end
 
 function ik(robot::TestRobot, target::AbstractVector, initial_guess::AbstractVector;
@@ -50,9 +66,17 @@ struct BezierCurve
     control_points::Matrix{Float64}
 end
 
-function make_bezier(p_start::AbstractVector, p_end::AbstractVector, t_param = 0.7)
-    # Control points for cubic Bezier curve (2x4)
-    P = hcat(p_start, [t_param, 0.0], [0.0, t_param], p_end)
+function make_bezier(p_start::AbstractVector,
+                     p_end::AbstractVector,
+                     alpha = 0.3)
+
+    d = p_end - p_start
+
+    P1 = p_start + alpha * d
+    P2 = p_end - alpha * d
+
+    P = hcat(p_start, P1, P2, p_end)
+
     return BezierCurve(P)
 end
 
@@ -103,10 +127,12 @@ end
 function joint_traj(cartesian_traj::Matrix{Float64}, robot::TestRobot,
                     initial_guess::AbstractVector)
     N = size(cartesian_traj, 1)
+    q = copy(initial_guess)
     joint_trajectory = zeros(N, robot.dof)
     for i in 1:N
         target = cartesian_traj[i, :]
-        joint_trajectory[i, :] = ik(robot, target, initial_guess, verbose=false)
+        q = ik(robot, target, q; max_iterations=50, tolerance=1e-5)
+        joint_trajectory[i, :] = q
     end
     return joint_trajectory
 end
@@ -218,7 +244,7 @@ end
 L1 = 0.2
 l2 = 0.3
 
-w1_max = w2_max = 335/360
+w1_max = w2_max = 335 * π / 180
 e1_max = e2_max = 2500
 q0 = [0.01, -0.02]
 testr = TestRobot(L1, l2, 2)
@@ -239,6 +265,7 @@ N = 4001
 theta = LinRange(0, 1, N)
 ds = theta[2] - theta[1]
 cart_traj = cartesian_traj(curve, theta, testr)
+display(plot(cart_traj[:, 1], cart_traj[:, 2], label="Cartesian Trajectory", xlabel="X", ylabel="Y"))
 jnt_traj = joint_traj(cart_traj, testr, q0)
 
 spl1 = Spline1D(theta, jnt_traj[:, 1], k=3, s=0.0)
@@ -259,7 +286,7 @@ dd_psi3_dth2 = theta -> -Dierckx.derivative(spl2, theta, 2)/2
 v_lim1 = [abs(w1_max / d_psi1_dth(t)) for t in theta]
 v_lim2 = [abs(w2_max / d_psi2_dth(t)) for t in theta]
 vel_profile = min.(v_lim1, v_lim2)
-
+display(plot(theta, vel_profile, label="Velocity Profile", xlabel="Theta", ylabel="Max Theta Dot"))
 time = zeros(length(theta))
 h = theta[2] - theta[1]
 
@@ -278,4 +305,4 @@ if n >= 5
     time[end] = p(theta[end])
 end
 
-display(plot(time, theta))
+display(plot(time, theta, label="Theta vs Time", xlabel="Time (s)", ylabel="Theta"))
