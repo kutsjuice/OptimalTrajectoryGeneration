@@ -246,7 +246,7 @@ curve = make_bezier(p0, p1, k * p0[1])
 N = 4001
 theta = LinRange(0, 1, N)
 ds = theta[2] - theta[1]
-cart_traj = cartesian_traj(curve, theta, testr)
+cart_traj = cartesian_traj(curve, theta)
 display(plot(cart_traj[:, 1], cart_traj[:, 2], label="Cartesian Trajectory", xlabel="X", ylabel="Y"))
 jnt_traj = joint_traj(cart_traj, testr, q0)
 
@@ -287,17 +287,3 @@ if n >= 5
     time[end] = p(theta[end])
 end
 display(plot(time, theta, label="Theta vs Time", xlabel="Time (s)", ylabel="Theta"))
-theta_to_spline = Spline1D(time, theta, k=3, s=0.0)
-theta_to_t = t -> theta_to_spline(t)
-d_th_to_t = t -> Dierckx.derivative(theta_to_spline, t)
-dd_th_to_t2 = t -> Dierckx.derivative(theta_to_spline, t, 2)
-d_th_d_t_f = ones(N)*1000;   d_th_d_t_b = ones(N)*1000
-dd_th_d_t2_f = zeros(N);   dd_th_d_t2_b = zeros(N); dd_th_d_t2_a = zeros(N)
-t = zeros(N)
-torq_before_opt = zeros(N, 2)
-i = 0
-for i in 1:N
-    # ---------------- forward ----------------
-    # take the current theta and it's derivative
-    theta_cur, d_th_dt =   
-end
