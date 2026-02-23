@@ -24,8 +24,21 @@ function forward_kinematics(robot::TestRobot, q::AbstractVector)
 end
 
 function body_jacobian(robot::TestRobot, q::Vector{Float64})
-    J = ForwardDiff.jacobian(q_vec -> forward_kinematics(robot, q_vec), q)
-    return J
+    q1, q2 = q
+    s1  = sin(q1)
+    s2  = sin(q1 + q2)
+    s12 = sin(q1 + 0.5*q2)
+    c1  = cos(q1)
+    c2  = cos(q1 + q2)
+    c12 = cos(q1 + 0.5*q2)
+    return [
+        -robot.l1*s1 - robot.l1*s2 - robot.l2*s12    -robot.l1*s2 - 0.5*robot.l2*s12
+         robot.l1*c1 + robot.l1*c2 + robot.l2*c12     robot.l1*c2 + 0.5*robot.l2*c12
+    ]
+end
+# function body_jacobian(robot::TestRobot, q::Vector{Float64})
+#     J = ForwardDiff.jacobian(q_vec -> forward_kinematics(robot, q_vec), q)
+#     return J
 
     # q1 = q[1]
     # q2 = q[2]
@@ -42,23 +55,20 @@ function body_jacobian(robot::TestRobot, q::Vector{Float64})
     #     -robot.l1 * s1 - robot.l1 * s2 - robot.l2 * s12     -robot.l1 * s2 - 0.5*robot.l2*s12
     #      robot.l1 * c1 + robot.l1 * c2 + robot.l2 * c12      robot.l1 * c2 + 0.5*robot.l2*c12
     # ]
-end
+# end
 
 function ik(robot::TestRobot, target::AbstractVector, initial_guess::AbstractVector;
-            max_iterations::Int = 100, tolerance::Float64 = 1e-6, verbose::Bool = false)
+            max_iterations=100, tolerance=1e-6)
     q = copy(initial_guess)
-    for i in 1:max_iterations
-        current_pos = forward_kinematics(robot, q)
-        error = target - current_pos
-        if norm(error) < tolerance
-            verbose && println("Converged in $i iterations.")
+    for _ in 1:max_iterations
+        pos = forward_kinematics(robot, q)
+        err = target - pos
+        if norm(err) < tolerance
             return q
         end
         J = body_jacobian(robot, q)
-        delta_q = pinv(J) * error
-        q += delta_q
+        q += J \ err
     end
-    verbose && println("Max iterations reached without convergence.")
     return q
 end
 
@@ -66,36 +76,22 @@ struct BezierCurve
     control_points::Matrix{Float64}
 end
 
-function make_bezier(p_start::AbstractVector,
-                     p_end::AbstractVector,
-                     alpha = 0.3)
-
-    d = p_end - p_start
-
-    P1 = p_start + alpha * d
-    P2 = p_end - alpha * d
-
-    P = hcat(p_start, P1, P2, p_end)
-
+function make_bezier(p_start::AbstractVector, p_end::AbstractVector, t=0.7)
+    P = hcat(p_start, [t, 0.0], [0.0, t], p_end)
     return BezierCurve(P)
 end
 
-function cartesian_traj(curve::BezierCurve, theta::AbstractVector, robot::TestRobot)
-    # Evaluate Bezier curve at parameter values theta
+function cartesian_traj(curve::BezierCurve, theta::AbstractVector)
     P = curve.control_points
-    num_points = length(theta)
-    trajectory = zeros(num_points, 2)  # Task space dimension is 2
-    
-    for i in 1:num_points
-        t = theta[i]
-        mt = 1 - t
-        # Cubic Bezier formula: B(t) = (1-t)³P₀ + 3(1-t)²t P₁ + 3(1-t)t² P₂ + t³ P₃
-        point = mt^3 * P[:, 1] + 3*mt^2*t * P[:, 2] + 3*mt*t^2 * P[:, 3] + t^3 * P[:, 4]
-        trajectory[i, :] = point
+    n = length(theta)
+    traj = zeros(n, 2)
+    for i in 1:n
+        t = theta[i]; mt = 1 - t
+        traj[i,:] = mt^3 * P[:,1] + 3*mt^2*t*P[:,2] + 3*mt*t^2*P[:,3] + t^3*P[:,4]
     end
-    
-    return trajectory
+    return traj
 end
+
 
 function max_theta_dot(jnt_traj::AbstractMatrix, theta::AbstractVector,
                        w1_max::Float64, w2_max::Float64)
@@ -124,47 +120,33 @@ function max_theta_dot(jnt_traj::AbstractMatrix, theta::AbstractVector,
     )
 end
 
-function joint_traj(cartesian_traj::Matrix{Float64}, robot::TestRobot,
-                    initial_guess::AbstractVector)
-    N = size(cartesian_traj, 1)
-    q = copy(initial_guess)
-    joint_trajectory = zeros(N, robot.dof)
+function joint_traj(cart_traj::Matrix{Float64}, robot::TestRobot, q_init::AbstractVector)
+    N = size(cart_traj,1)
+    q = copy(q_init)
+    q_traj = zeros(N, robot.dof)
     for i in 1:N
-        target = cartesian_traj[i, :]
-        q = ik(robot, target, q; max_iterations=50, tolerance=1e-5)
-        joint_trajectory[i, :] = q
+        q = ik(robot, cart_traj[i,:], q; max_iterations=50, tolerance=1e-5)
+        q_traj[i,:] = q
     end
-    return joint_trajectory
+    return q_traj
 end
 
 function time_parametrise(theta::AbstractVector, theta_dot_max::AbstractVector)
     T = eltype(theta)
     n = length(theta)
-    # Knot indices for interpolation (every 50th point and the last one)
     idx = vcat(1:50:n, n)
-    knots = copy(theta_dot_max)
-    knots[1] = knots[end] = 0.0  # Zero velocity at boundaries
-    
-    # Check if step is approximately uniform
-    if isapprox(diff(theta[idx]), fill(mean(diff(theta[idx])), length(idx)-1), rtol=1e-6)
-        # Uniform step - use Akima spline
-        itp = interpolate(knots, BSpline(Akima(Line(OnGrid()))))
-        vel_prof = zeros(T, n)
-        for i in 1:n
-            scaled_idx = 1 + (i-1) * (length(idx) - 1) / (n - 1)
-            vel_prof[i] = itp(scaled_idx)
-        end
+    knots = theta_dot_max[idx]
+    knots[1] = knots[end] = 0.0
+    if isapprox(diff(theta[idx]), fill(mean(diff(theta[idx])), length(idx)-1); rtol=1e-6)
+        itp = interpolate(knots, BSpline(Akima(Line(OnGrid()))))  # Assumes Interpolations supports Akima; else use Cubic
+        vel_prof = [itp(1 + (i-1)*(length(idx)-1)/(n-1)) for i in 1:n]
     else
-        # Non-uniform step - linear interpolation between knots
         itp = LinearInterpolation(theta[idx], knots)
         vel_prof = itp.(theta)
     end
-    
-    h = theta[2] - theta[1]  # Step in theta
+    h = theta[2] - theta[1]
     time = zeros(T, n)
-    time[2:end] = cumsum(h ./ vel_prof[2:end])  # Accumulate time
-    
-    # Quadratic approximation of the last segment for smoothing
+    time[2:end] = cumsum(h ./ vel_prof[2:end])
     if n >= 5
         idx_fit = (n-3):(n-1)
         p = fit(theta[idx_fit], time[idx_fit], 2)
