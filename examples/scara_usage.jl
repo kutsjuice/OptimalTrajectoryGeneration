@@ -5,14 +5,30 @@ using Interpolations
 using Polynomials
 using QuadGK
 using Dierckx
+using NPZ
 
 abstract type AbstractRobotManipulator end
 
-struct TestRobot <: AbstractRobotManipulator
+mutable struct TestRobot <: AbstractRobotManipulator
     l1::Float64
     l2::Float64
     dof::Int
+    # gravity::SVector{3,Float64}
+    # links::Vector{Link}
 end
+
+# struct Link
+#     parent::Int
+#     Xtree::SMatrix{6,6,Float64}
+#     inertia::SMatrix{6,6,Float64}
+#     pitch::Float64
+# end
+
+# struct SpatialInertia
+#     mass::Float64
+#     com::SVector{3,Float64}
+#     inertia::SMatrix{3,3,Float64}
+# end
 
 function forward_kinematics(robot::TestRobot, q::AbstractVector)
     q1 = q[1]
@@ -55,6 +71,82 @@ end
     #     -robot.l1 * s1 - robot.l1 * s2 - robot.l2 * s12     -robot.l1 * s2 - 0.5*robot.l2*s12
     #      robot.l1 * c1 + robot.l1 * c2 + robot.l2 * c12      robot.l1 * c2 + 0.5*robot.l2*c12
     # ]
+# end
+
+# function inverse_dynamics(
+#     robot::TestRobot,
+#     q::Vector{Float64},
+#     qd::Vector{Float64},
+#     qdd::Vector{Float64}
+# )::Vector{Float64}
+#     """Recursive Newton-Euler Algorithm for inverse dynamics"""
+#     @assert length(q) == length(qd) == length(qdd) == model.N
+    
+#     n = model.N
+#     v = Vector{SVector{6,Float64}}(undef, n)
+#     a = Vector{SVector{6,Float64}}(undef, n)
+#     f = Vector{SVector{6,Float64}}(undef, n)
+#     S = Vector{SVector{6,Float64}}(undef, n)
+#     Xup = Vector{SMatrix{6,6,Float64}}(undef, n)
+    
+#     a0 = @SVector [
+#         0.0, 0.0, 0.0,
+#         -robot.gravity[1], -robot.gravity[2], -robot.gravity[3]
+#     ]
+    
+#     τ = zeros(n)
+    
+#     # Forward pass: compute accelerations and velocities
+#     for i in 1:n
+#         XJ, S[i] = jcalc(robot.links[i].pitch, q[i])
+#         Xup[i] = robot.links[i].Xtree * XJ
+        
+#         vJ = S[i] * qd[i]
+        
+#         if robot.links[i].parent == 0
+#             v[i] = vJ
+#             a[i] = Xup[i]*a0 + S[i]*qdd[i] + crm(v[i])*vJ
+#         else
+#             p = robot.links[i].parent
+#             v[i] = Xup[i]*v[p] + vJ
+#             a[i] = Xup[i]*a[p] + S[i]*qdd[i] + crm(v[i])*vJ
+#         end
+#     end
+    
+#     # Backward pass: compute forces and torques
+#     for i in n:-1:1
+#         I = spatial_inertia(robot.links[i].inertia)
+#         f[i] = I*a[i] + crf(v[i])*(I*v[i])
+        
+#         if robot.links[i].parent != 0
+#             p = robot.links[i].parent
+#             f[p] += Xup[i]'*f[i]
+#         end
+        
+#         τ[i] = S[i]' * f[i]
+#     end
+    
+#     return τ
+# end
+
+# function compute_mass_matrix_and_force_terms(
+#     robot::TestRobot,
+#     q::Vector{Float64},
+#     qd::Vector{Float64}
+# )::Tuple{Matrix{Float64}, Vector{Float64}}
+#     """Compute mass matrix M and bias terms (Coriolis + gravity)"""
+#     n = robot.dof
+#     M = zeros(n, n)
+#     bias = inverse_dynamics(robot, q, qd, zeros(n))
+    
+#     for j = 1:n
+#         qdd_unit = zeros(n)
+#         qdd_unit[j] = 1.0
+#         τ = inverse_dynamics(robot, q, zeros(n), qdd_unit)
+#         M[:, j] .= τ
+#     end
+    
+#     return M, bias
 # end
 
 function ik(robot::TestRobot, target::AbstractVector, initial_guess::AbstractVector;
@@ -287,3 +379,68 @@ if n >= 5
     time[end] = p(theta[end])
 end
 display(plot(time, theta, label="Theta vs Time", xlabel="Time (s)", ylabel="Theta"))
+theta_to_t_spl = Spline1D(theta, time, k=3, s=0.0)
+theta_to_t = t -> theta_to_t_spl(t)
+d_th_to_t = t -> Dierckx.derivative(theta_to_t_spl, t)
+dd_th_to_t2 = t -> Dierckx.derivative(theta_to_t_spl, t, 2)
+
+d_th_d_t_f = ones(N) * 1e3; d_th_d_t_b = ones(N) * 1e3
+dd_th_d_t2_f = zeros(N); dd_th_d_t2_b = zeros(N);; dd_th_d_t2_a = zeros(N)
+t = zeros(N)
+torq_before_opt = zeros(2, N-1)   # 2 строки × (N-1) столбцов
+
+for i in 2:N
+    theta_cur     = 0.5 * (theta[i-1] + theta[i])
+    d_th_dt_cur   = 0.5 * (vel_profile[i-1] + vel_profile[i])
+    dd_th_d_t2_cur = (vel_profile[i] - vel_profile[i-1]) / ds * d_th_dt_cur
+
+    q_cur = [
+        0.0,
+        psi1(theta_cur),
+        psi2(theta_cur),
+        -psi2(theta_cur)/2
+    ]
+
+    dq_cur = [
+        0.0,
+        d_psi1_dth(theta_cur) * d_th_dt_cur,
+        d_psi2_dth(theta_cur) * d_th_dt_cur,
+        -d_psi2_dth(theta_cur) * d_th_dt_cur / 2
+    ]
+
+    ddq_cur = [
+        0.0,
+        dd_psi1_dth2(theta_cur) * d_th_dt_cur^2 + d_psi1_dth(theta_cur) * dd_th_d_t2_cur,
+        dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur,
+        -(dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur)/2
+    ]
+
+    M = diagm(0 => [1.0, 1.0, 1.0, 1.0])
+    h = zeros(4)
+
+    torq = M * ddq_cur + h
+
+    torq_before_opt[:, i-1] = torq[2:3]
+end
+filename = "torq_before_opt_k=$(k).npz"
+npzwrite(filename, Dict("torq" => torq_before_opt, "theta" => theta))
+d_th_d_t_f = fill(1000.0, N)
+d_th_d_t_b = fill(1000.0, N)
+mask = (theta .> 0.05) .& (theta .< 0.95)
+p = 0.75
+Tmax = fill( maximum(abs.(torq_before_opt[:, mask])) * p, 4 )
+Tmax[end] = Inf
+th0  = 0.0
+dth0 = 0.0
+q0 = [
+    0.0,
+    psi1(th0),
+    psi2(th0),
+    psi3(th0)
+]
+dq0 = [
+    0.0,
+    d_psi1_dth(th0) * dth0,
+    d_psi2_dth(th0) * dth0,
+    d_psi3_dth(th0) * dth0
+]
