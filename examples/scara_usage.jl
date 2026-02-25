@@ -444,3 +444,101 @@ dq0 = [
     d_psi2_dth(th0) * dth0,
     d_psi3_dth(th0) * dth0
 ]
+# M, h = ComputeMassMatrixAndForceTerms(q0, dq0)
+
+# Начальные условия
+d_th_d_t_f[1] = 0.0;    t[0] = 0.0
+d_th_d_t_b[end] = 0.0
+d_psi__d_th = [
+    0,
+    dd_psi1_dth2(th0),
+    dd_psi2_dth2(th0),
+    dd_psi3_dth2(th0)   
+]
+dd_psi_dth2 = [
+    0,
+    dd_psi1_dth2(th0),
+    dd_psi2_dth2(th0),
+    dd_psi3_dth2(th0)
+]
+a_buf  = M * dd_psi_d_th2
+v_buf = M * d_psi_dth
+th_buf = Inf
+buf = []
+for i in 1:4
+    th_i = sqrt(abs(Tmax[i] / (0.5v_buf[i]/ds + 0.25a_buf[i])))
+    th_buf = min(th_buf, th_i)
+end
+d_th_d_t_f[2] = th_buf
+
+d_psi_d_th = [
+    0,
+    d_psi1_dth(1),
+    d_psi2_dth(1),
+    d_psi3_dth(1)
+]
+d_psi_d_th2 = [
+    0,
+    dd_psi1_dth2(1),
+    dd_psi2_dth2(1),
+    dd_psi3_dth2(1)
+]
+a_buf  = M * d_psi_d_th2
+v_buf = M * d_psi_d_th
+th_buf = Inf
+for i in 1:4
+    th_i = sqrt(abs(Tmax[i] / (0.5v_buf[i]/ds + 0.25a_buf[i])))
+    th_buf = min(th_buf, th_i)
+end
+d_th_d_t_b[end-1] = th_buf
+dd_th_d_t2_f[0] = (d_th_d_t_f[2])/ds
+dd_th_d_t2_b[end] = -(d_th_d_t_b[end-1])/ds
+for i in 2:N
+    # Forward pass
+    theta_cur, d_th_dt_cur = theta[i-1], d_th_d_t_f[i-1]
+    ddtheta_prev = dd_th_d_t2_f[i-1] - d_th_d_t_f[i-2]
+    d_th_dt_half = d_th_dt_cur + 0.5 * ddtheta_prev * ds
+    # Compute current joint values and velocities
+    q_cur = [
+        0,
+        d_psi1_dth(theta_cur + ds/2) * d_th_dt_half,
+        d_psi2_dth(theta_cur + ds/2) * d_th_dt_half,
+        d_psi3_dth(theta_cur + ds/2) * d_th_dt_half
+    ]
+    # M, h = ComputeMassMatrixAndForceTerms(q_cur, dq0)
+    # Compute partial products f1 and f2
+    f1 = M * [
+        0,
+        d_psi1_dth(theta_cur + ds/2) * d_th_dt_half,
+        d_psi2_dth(theta_cur + ds/2) * d_th_dt_half,
+        d_psi3_dth(theta_cur + ds/2) * d_th_dt_half,
+    ]
+    f2 = M * [
+        0,
+        dd_psi1_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi2_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi3_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
+    ]
+    ddtheta_arr = zeros(3)
+    ddtheta_arr[1] = Inf
+    for j in 1:3
+        Ti = 0
+        if f1[j] < 0
+            Ti = - Tmax[j] - h[j]
+        elseif f1[j] > 0
+            Ti = Tmax[j] - h[j]
+        else
+            throw("Something wrong")
+        end
+
+        ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+    end
+    ddtheta = min(ddtheta_arr)
+    d_th_d_t_f[i] = min([vel_profile[i], d_th_dt_cur + ddtheta * ds])
+
+    # Backward pass
+    theta_cur, d_th_dt_cur = theta[end-i], d_th_d_t_b[end-i]
+    ddtheta_prev = dd_th_d_t2_b[end-i+1] - d_th_d_t_b[end-i+2]
+    d_th_dt_half = d_th_dt_cur + 0.5 * ds * ddtheta_prev
+    
+end
