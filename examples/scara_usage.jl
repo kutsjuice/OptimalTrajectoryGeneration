@@ -184,7 +184,6 @@ function cartesian_traj(curve::BezierCurve, theta::AbstractVector)
     return traj
 end
 
-
 function max_theta_dot(jnt_traj::AbstractMatrix, theta::AbstractVector,
                        w1_max::Float64, w2_max::Float64)
     # Create cubic spline interpolations with linear extrapolation
@@ -314,7 +313,9 @@ function acceleration_limits(theta, d_th_dt,
     return low_lim, upp_lim
 end
 
-# Example usage
+# ==================== MAIN SCRIPT ====================
+
+# Robot parameters
 L1 = 0.2
 l2 = 0.3
 
@@ -342,6 +343,7 @@ cart_traj = cartesian_traj(curve, theta)
 display(plot(cart_traj[:, 1], cart_traj[:, 2], label="Cartesian Trajectory", xlabel="X", ylabel="Y"))
 jnt_traj = joint_traj(cart_traj, testr, q0)
 
+# Spline interpolation of joint trajectories
 spl1 = Spline1D(theta, jnt_traj[:, 1], k=3, s=0.0)
 spl2 = Spline1D(theta, jnt_traj[:, 2], k=3, s=0.0)
 
@@ -357,42 +359,49 @@ dd_psi1_dth2 = theta -> Dierckx.derivative(spl1, theta, 2)
 dd_psi2_dth2 = theta -> Dierckx.derivative(spl2, theta, 2)
 dd_psi3_dth2 = theta -> -Dierckx.derivative(spl2, theta, 2)/2
 
+# Velocity limit from joint velocity constraints
 v_lim1 = [abs(w1_max / d_psi1_dth(t)) for t in theta]
 v_lim2 = [abs(w2_max / d_psi2_dth(t)) for t in theta]
 vel_profile = min.(v_lim1, v_lim2)
+# Avoid division by zero
+vel_profile = max.(vel_profile, 1e-10)
 display(plot(theta, vel_profile, label="Velocity Profile", xlabel="Theta", ylabel="Max Theta Dot"))
+
+# Crude time estimate (just for initial guess, will be recomputed later)
 time = zeros(length(theta))
 h = theta[2] - theta[1]
-
 for i in 2:length(theta)
-    if vel_profile[i] > 1e-10
-        time[i] = time[i-1] + h / vel_profile[i]
-    else
-        time[i] = time[i-1] + h / 1e-10
-    end
+    time[i] = time[i-1] + h / vel_profile[i]
 end
-
 n = length(theta)
 if n >= 5
     idx_fit = n-4:n
     p = fit(theta[idx_fit], time[idx_fit], 2)
     time[end] = p(theta[end])
 end
-display(plot(time, theta, label="Theta vs Time", xlabel="Time (s)", ylabel="Theta"))
+display(plot(time, theta, label="Theta vs Time (initial)", xlabel="Time (s)", ylabel="Theta"))
+
+# Spline for theta(t) – not used later but kept for consistency
 theta_to_t_spl = Spline1D(theta, time, k=3, s=0.0)
 theta_to_t = t -> theta_to_t_spl(t)
 d_th_to_t = t -> Dierckx.derivative(theta_to_t_spl, t)
 dd_th_to_t2 = t -> Dierckx.derivative(theta_to_t_spl, t, 2)
 
-d_th_d_t_f = ones(N) * 1e3; d_th_d_t_b = ones(N) * 1e3
-dd_th_d_t2_f = zeros(N); dd_th_d_t2_b = zeros(N);; dd_th_d_t2_a = zeros(N)
-t = zeros(N)
-torq_before_opt = zeros(2, N-1)   # 2 строки × (N-1) столбцов
+# Arrays for forward/backward integration
+d_th_d_t_f = ones(N) * 1e3
+d_th_d_t_b = ones(N) * 1e3
+dd_th_d_t2_f = zeros(N)
+dd_th_d_t2_b = zeros(N)
+dd_th_d_t2_a = zeros(N)   # not used
+t_vals = zeros(N)
 
+# Torques before optimization (using vel_profile as velocity)
+torq_before_opt = zeros(2, N-1)
 
-
+# Simplified dynamic model (constant mass matrix, no bias)
 M = diagm(0 => [1.0, 1.0, 1.0, 1.0])
 h = zeros(4)
+
 for i in 2:N
     theta_cur     = 0.5 * (theta[i-1] + theta[i])
     d_th_dt_cur   = 0.5 * (vel_profile[i-1] + vel_profile[i])
@@ -402,196 +411,226 @@ for i in 2:N
         0.0,
         psi1(theta_cur),
         psi2(theta_cur),
-        -psi2(theta_cur)/2
+        psi3(theta_cur)
     ]
 
     dq_cur = [
         0.0,
         d_psi1_dth(theta_cur) * d_th_dt_cur,
         d_psi2_dth(theta_cur) * d_th_dt_cur,
-        -d_psi2_dth(theta_cur) * d_th_dt_cur / 2
+        d_psi3_dth(theta_cur) * d_th_dt_cur
     ]
 
     ddq_cur = [
         0.0,
         dd_psi1_dth2(theta_cur) * d_th_dt_cur^2 + d_psi1_dth(theta_cur) * dd_th_d_t2_cur,
         dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur,
-        -(dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur)/2
+        dd_psi3_dth2(theta_cur) * d_th_dt_cur^2 + d_psi3_dth(theta_cur) * dd_th_d_t2_cur
     ]
 
-
     torq = M * ddq_cur + h
-
     torq_before_opt[:, i-1] = torq[2:3]
 end
+
 filename = "torq_before_opt_k=$(k).npz"
 npzwrite(filename, Dict("torq" => torq_before_opt, "theta" => theta))
+
+# Reset forward/backward arrays
 d_th_d_t_f = fill(1000.0, N)
 d_th_d_t_b = fill(1000.0, N)
+dd_th_d_t2_f = zeros(N)
+dd_th_d_t2_b = zeros(N)
+
+# Determine torque limit based on pre-optimization torques
 mask = (theta[1:end-1] .> 0.05) .& (theta[1:end-1] .< 0.95)
 p = 0.75
 Tmax_val = maximum(abs.(torq_before_opt[:, mask])) * p
 Tmax = fill(Tmax_val, 4)
-Tmax[end] = Inf
+Tmax[end] = Inf   # no limit on the last joint (virtual)
+
+# Initial conditions
 th0  = 0.0
 dth0 = 0.0
-q0 = [
+q0_vec = [
     0.0,
     psi1(th0),
     psi2(th0),
     psi3(th0)
 ]
-dq0 = [
+dq0_vec = [
     0.0,
     d_psi1_dth(th0) * dth0,
     d_psi2_dth(th0) * dth0,
     d_psi3_dth(th0) * dth0
 ]
-# M, h = ComputeMassMatrixAndForceTerms(q0, dq0)
 
-# Начальные условия
-d_th_d_t_f[1] = 0.0;    t[1] = 0.0
+# Initial guess for forward pass at first step (θ₁)
+d_th_d_t_f[1] = 0.0
 d_th_d_t_b[end] = 0.0
-d_psi_d_th = [
-    0,
-    d_psi1_dth(th0),
-    d_psi2_dth(th0),
-    d_psi3_dth(th0)
-]
-dd_psi_dth2 = [
-    0,
-    dd_psi1_dth2(th0),
-    dd_psi2_dth2(th0),
-    dd_psi3_dth2(th0)
-]
-a_buf  = M * dd_psi_dth2
-v_buf = M * d_psi_d_th
-th_buf = Inf
-buf = []
-for i in 1:4
-    local th_buf = Inf
-    th_i = sqrt(abs(Tmax[i] / (0.5 * v_buf[i] / ds + 0.25a_buf[i])))
-    th_buf = min(th_buf, th_i)
-end
-d_th_d_t_f[2] = th_buf
 
-d_psi_d_th = [
-    0,
-    d_psi1_dth(1),
-    d_psi2_dth(1),
-    d_psi3_dth(1)
-]
-d_psi_d_th2 = [
-    0,
-    dd_psi1_dth2(1),
-    dd_psi2_dth2(1),
-    dd_psi3_dth2(1)
-]
-a_buf  = M * d_psi_d_th2
-v_buf = M * d_psi_d_th
-th_buf = Inf
+# Compute initial acceleration bound at start (θ=0)
+d_psi_d_th_0 = [0, d_psi1_dth(0), d_psi2_dth(0), d_psi3_dth(0)]
+dd_psi_dth2_0 = [0, dd_psi1_dth2(0), dd_psi2_dth2(0), dd_psi3_dth2(0)]
+a_buf = M * dd_psi_dth2_0
+v_buf = M * d_psi_d_th_0
+th_buf_temp = Inf
 for i in 1:4
-    local th_buf = Inf
-    th_i = sqrt(abs(Tmax[i] / (0.5v_buf[i]/ds + 0.25a_buf[i])))
-    th_buf = min(th_buf, th_i)
+    if abs(v_buf[i]) > 1e-12 && Tmax[i] < Inf
+        th_i = sqrt(abs(Tmax[i] / (0.5 * abs(v_buf[i]) / ds + 0.25 * abs(a_buf[i]))))
+        global th_buf_temp = min(th_buf_temp, th_i)
+    end
 end
-d_th_d_t_b[end-1] = th_buf
-dd_th_d_t2_f[1] = (d_th_d_t_f[2])/ds
-dd_th_d_t2_b[end] = -(d_th_d_t_b[end-1])/ds
-for i in 3:N
-    # Forward pass
-    theta_cur, d_th_dt_cur = theta[i-1], d_th_d_t_f[i-1]
-    ddtheta_prev = dd_th_d_t2_f[i-1] - d_th_d_t_f[i-2]
-    d_th_dt_half = d_th_dt_cur + 0.5 * ddtheta_prev * ds
-    # Compute current joint values and velocities
-    q_cur = [
-        0,
-        d_psi1_dth(theta_cur + ds/2) * d_th_dt_half,
-        d_psi2_dth(theta_cur + ds/2) * d_th_dt_half,
-        d_psi3_dth(theta_cur + ds/2) * d_th_dt_half
-    ]
-    # M, h = ComputeMassMatrixAndForceTerms(q_cur, dq0)
-    # Compute partial products f1 and f2
+d_th_d_t_f[2] = th_buf_temp
+
+# Compute initial acceleration bound at end (θ=1)
+d_psi_d_th_1 = [0, d_psi1_dth(1), d_psi2_dth(1), d_psi3_dth(1)]
+dd_psi_dth2_1 = [0, dd_psi1_dth2(1), dd_psi2_dth2(1), dd_psi3_dth2(1)]
+a_buf = M * dd_psi_dth2_1
+v_buf = M * d_psi_d_th_1
+th_buf_temp = Inf
+for i in 1:4
+    if abs(v_buf[i]) > 1e-12 && Tmax[i] < Inf
+        th_i = sqrt(abs(Tmax[i] / (0.5 * abs(v_buf[i]) / ds + 0.25 * abs(a_buf[i]))))
+        global th_buf_temp = min(th_buf_temp, th_i)
+    end
+end
+d_th_d_t_b[end-1] = th_buf_temp
+
+# Approximate second derivatives at boundaries
+dd_th_d_t2_f[1] = (d_th_d_t_f[2]) / ds
+dd_th_d_t2_b[end] = -(d_th_d_t_b[end-1]) / ds
+
+# ========== FORWARD PASS (θ increasing) ==========
+for i in 2:N-1
+    θ_cur = theta[i]
+    θ_nxt = theta[i+1]
+    dθ = θ_nxt - θ_cur
+    v_cur = d_th_d_t_f[i]
+
+    # Evaluate at midpoint using current velocity as estimate
+    θ_mid = θ_cur + dθ/2
+    v_mid = v_cur
+
+    # Compute f1 and f2 (coefficients for torque equation: τ = f1 * ddθ + f2)
     f1 = M * [
         0,
-        d_psi1_dth(theta_cur + ds/2) * d_th_dt_half,
-        d_psi2_dth(theta_cur + ds/2) * d_th_dt_half,
-        d_psi3_dth(theta_cur + ds/2) * d_th_dt_half,
+        d_psi1_dth(θ_mid) * v_mid,
+        d_psi2_dth(θ_mid) * v_mid,
+        d_psi3_dth(θ_mid) * v_mid,
     ]
     f2 = M * [
         0,
-        dd_psi1_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
-        dd_psi2_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
-        dd_psi3_dth2(theta_cur + ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi1_dth2(θ_mid) * v_mid^2,
+        dd_psi2_dth2(θ_mid) * v_mid^2,
+        dd_psi3_dth2(θ_mid) * v_mid^2,
     ]
-    ddtheta_arr = zeros(3)
-    ddtheta_arr[1] = Inf
-    for j in 1:3
-        if abs(f1[j]) < 1e-12
-            ddtheta_arr[j] = Inf
-        elseif f1[j] < 0
-            Ti = -Tmax[j] - h[j]
-            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+
+    # Determine allowable acceleration range from torque limits
+    a_min = -Inf
+    a_max = Inf
+    for j in 1:4
+        if abs(f1[j]) < 1e-12 || isinf(Tmax[j])
+            continue
+        end
+        if f1[j] > 0
+            a_min = max(a_min, (-Tmax[j] - f2[j]) / f1[j])
+            a_max = min(a_max, ( Tmax[j] - f2[j]) / f1[j])
         else
-            Ti = Tmax[j] - h[j]
-            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+            a_min = max(a_min, ( Tmax[j] - f2[j]) / f1[j])
+            a_max = min(a_max, (-Tmax[j] - f2[j]) / f1[j])
         end
     end
-    ddtheta = minimum(ddtheta_arr)
-    d_th_d_t_f[i] = min(vel_profile[i], d_th_dt_cur + ddtheta * ds) 
-    # Backward pass
-    theta_cur, d_th_dt_cur = theta[end-i+1], d_th_d_t_b[end-i+1]
-    ddtheta_prev = dd_th_d_t2_b[end-i+1] - d_th_d_t_b[end-i+2]
-    d_th_dt_half = d_th_dt_cur + 0.5 * ds * ddtheta_prev
 
-    q_cur = [
-        0,
-        psi1(theta_cur - ds/2),
-        psi2(theta_cur - ds/2),
-        psi3(theta_cur - ds/2)
-    ]
-    dq0_cur = [
-        0,
-        d_psi1_dth(theta_cur - ds/2) * d_th_dt_half,
-        d_psi2_dth(theta_cur - ds/2) * d_th_dt_half,
-        d_psi3_dth(theta_cur - ds/2) * d_th_dt_half
-    ]
-    # M, h = ComputeMassMatrixAndForceTerms(q_cur, dq0_cur)
+    # Maximum possible velocity at next point using maximum acceleration
+    v_nxt_candidate = sqrt(max(0.0, v_cur^2 + 2 * a_max * dθ))
+
+    # Clamp to kinematic limit
+    if v_nxt_candidate > vel_profile[i+1]
+        # Need to reduce acceleration to exactly hit kinematic limit
+        a_req = (vel_profile[i+1]^2 - v_cur^2) / (2 * dθ)
+        if a_req > a_max
+            v_nxt = v_nxt_candidate
+        elseif a_req < a_min
+            v_nxt = sqrt(max(0.0, v_cur^2 + 2 * a_min * dθ))
+        else
+            v_nxt = vel_profile[i+1]
+        end
+    else
+        v_nxt = v_nxt_candidate
+    end
+
+    v_nxt = max(0.0, v_nxt)
+    d_th_d_t_f[i+1] = v_nxt
+    dd_th_d_t2_f[i] = (v_nxt^2 - v_cur^2) / (2 * dθ)   # average acceleration
+end
+dd_th_d_t2_f[N] = 0.0
+
+# ========== BACKWARD PASS (θ decreasing) ==========
+for i in N-1:-1:2
+    θ_cur = theta[i]
+    θ_nxt = theta[i+1]
+    dθ = θ_nxt - θ_cur
+    v_nxt = d_th_d_t_b[i+1]
+
+    # Midpoint evaluation using next velocity
+    θ_mid = θ_cur + dθ/2
+    v_mid = v_nxt
+
     f1 = M * [
         0,
-        d_psi1_dth(theta_cur - ds/2) * d_th_dt_half,
-        d_psi2_dth(theta_cur - ds/2) * d_th_dt_half,
-        d_psi3_dth(theta_cur - ds/2) * d_th_dt_half,
+        d_psi1_dth(θ_mid) * v_mid,
+        d_psi2_dth(θ_mid) * v_mid,
+        d_psi3_dth(θ_mid) * v_mid,
     ]
     f2 = M * [
         0,
-        dd_psi1_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
-        dd_psi2_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
-        dd_psi3_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi1_dth2(θ_mid) * v_mid^2,
+        dd_psi2_dth2(θ_mid) * v_mid^2,
+        dd_psi3_dth2(θ_mid) * v_mid^2,
     ]
-    ddtheta_arr = zeros(3)
-    ddtheta_arr = fill(-Inf, 3)
-    for j in 1:3
-        if abs(f1[j]) < 1e-12
-            ddtheta_arr[j] = -Inf
-        elseif f1[j] < 0
-            Ti = -Tmax[j] - h[j]
-            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+
+    a_min = -Inf
+    a_max = Inf
+    for j in 1:4
+        if abs(f1[j]) < 1e-12 || isinf(Tmax[j])
+            continue
+        end
+        if f1[j] > 0
+            a_min = max(a_min, (-Tmax[j] - f2[j]) / f1[j])
+            a_max = min(a_max, ( Tmax[j] - f2[j]) / f1[j])
         else
-            Ti = Tmax[j] - h[j]
-            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+            a_min = max(a_min, ( Tmax[j] - f2[j]) / f1[j])
+            a_max = min(a_max, (-Tmax[j] - f2[j]) / f1[j])
         end
     end
-    ddtheta = maximum(ddtheta_arr)
-    d_th_d_t_new = min(vel_profile[end-i+1], d_th_dt_cur + ddtheta * ds)
 
-    d_th_d_t_b[end-i+1] = abs(d_th_d_t_new)
+    # For backward pass we want to find v_cur from v_nxt: v_cur^2 = v_nxt^2 - 2*a*dθ
+    # To maximize v_cur we choose the smallest a (most negative)
+    v_cur_candidate = sqrt(max(0.0, v_nxt^2 - 2 * a_min * dθ))
+
+    if v_cur_candidate > vel_profile[i]
+        a_req = (v_nxt^2 - vel_profile[i]^2) / (2 * dθ)
+        if a_req < a_min
+            v_cur = v_cur_candidate
+        elseif a_req > a_max
+            v_cur = sqrt(max(0.0, v_nxt^2 - 2 * a_max * dθ))
+        else
+            v_cur = vel_profile[i]
+        end
+    else
+        v_cur = v_cur_candidate
+    end
+
+    v_cur = max(0.0, v_cur)
+    d_th_d_t_b[i] = v_cur
+    dd_th_d_t2_b[i] = (v_nxt^2 - v_cur^2) / (2 * dθ)
 end
 
+# Final trajectory as elementwise minimum
 traj = min.(d_th_d_t_f, d_th_d_t_b)
 
+# Compute torques after optimization
 torq_after_opt = zeros(2, N-1)
-
 for i in 2:N
     theta_cur   = 0.5 * (theta[i-1] + theta[i])
     d_th_dt_cur = 0.5 * (traj[i-1] + traj[i])
@@ -613,61 +652,48 @@ for i in 2:N
 
     ddq_cur = [
         0.0,
-        dd_psi1_dth2(theta_cur) * d_th_dt_cur^2 +
-        d_psi1_dth(theta_cur)  * dd_th_d_t2_cur,
-
-        dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 +
-        d_psi2_dth(theta_cur)  * dd_th_d_t2_cur,
-
-        dd_psi3_dth2(theta_cur) * d_th_dt_cur^2 +
-        d_psi3_dth(theta_cur)  * dd_th_d_t2_cur
+        dd_psi1_dth2(theta_cur) * d_th_dt_cur^2 + d_psi1_dth(theta_cur) * dd_th_d_t2_cur,
+        dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur,
+        dd_psi3_dth2(theta_cur) * d_th_dt_cur^2 + d_psi3_dth(theta_cur) * dd_th_d_t2_cur
     ]
 
     torq = M * ddq_cur + h
     torq_after_opt[:, i-1] = torq[2:3]
 end
 
+# Save results
 npzwrite("velocity_prof_opt_k=$(k)_p=$(p).npz",
-         Dict("velocity_profile" => traj,
-              "theta" => theta))
-
+         Dict("velocity_profile" => traj, "theta" => theta))
 npzwrite("torq_after_opt_k=$(k)_p=$(p).npz",
-         Dict("torq" => torq_after_opt,
-              "theta" => theta))
+         Dict("torq" => torq_after_opt, "theta" => theta))
 
+# Plotting
 plot(theta, vel_profile, label="Velocity limit")
 plot!(theta, d_th_d_t_f, label="Forward")
 plot!(theta, d_th_d_t_b, label="Backward")
-plot!(theta, traj, label="Final trajectory")
+plot!(theta, traj, label="Final trajectory", linewidth=2)
 xlabel!("θ")
 ylabel!("θ̇")
-gr()
+display(plot!())
 
-plot(theta[1:end-1], torq_before_opt[1,:],
-     label="Joint 1 before")
-plot!(theta[1:end-1], torq_before_opt[2,:],
-     label="Joint 2 before")
-
-plot!(theta[1:end-1], torq_after_opt[1,:],
-     label="Joint 1 after")
-
-plot!(theta[1:end-1], torq_after_opt[2,:],
-     label="Joint 2 after")
-
+plot(theta[1:end-1], torq_before_opt[1,:], label="Joint 1 before")
+plot!(theta[1:end-1], torq_before_opt[2,:], label="Joint 2 before")
+plot!(theta[1:end-1], torq_after_opt[1,:], label="Joint 1 after")
+plot!(theta[1:end-1], torq_after_opt[2,:], label="Joint 2 after")
 xlabel!("θ")
 ylabel!("Torque")
-gr()
+display(plot!())
 
-time = zeros(N)
+# Compute time from optimized trajectory
+time_opt = zeros(N)
 for i in 2:N
     if traj[i] > 1e-10
-        time[i] = time[i-1] + ds / traj[i]
+        time_opt[i] = time_opt[i-1] + ds / traj[i]
     else
-        time[i] = time[i-1]
+        time_opt[i] = time_opt[i-1]
     end
 end
 
-plot(time, theta,
-     xlabel="t (s)",
-     ylabel="θ",
-     label="θ(t)")
+plot(time_opt, theta, xlabel="t (s)", ylabel="θ", label="θ(t)")
+display(plot!())
+
