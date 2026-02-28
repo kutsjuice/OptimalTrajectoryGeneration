@@ -668,21 +668,31 @@ npzwrite("torq_after_opt_k=$(k)_p=$(p).npz",
          Dict("torq" => torq_after_opt, "theta" => theta))
 
 # Plotting
-plot(theta, vel_profile, label="Velocity limit")
-plot!(theta, d_th_d_t_f, label="Forward")
-plot!(theta, d_th_d_t_b, label="Backward")
-plot!(theta, traj, label="Final trajectory", linewidth=2)
+# Velocity profiles (исключаем краевые точки θ)
+plot(theta[2:end-1], vel_profile[2:end-1], label="Velocity limit")
+plot!(theta[2:end-1], d_th_d_t_f[2:end-1], label="Forward")
+plot!(theta[2:end-1], d_th_d_t_b[2:end-1], label="Backward")
+plot!(theta[2:end-1], traj[2:end-1], label="Final trajectory", linewidth=2)
 xlabel!("θ")
 ylabel!("θ̇")
 display(plot!())
+savefig("velocity_profiles.png")
 
-plot(theta[1:end-1], torq_before_opt[1,:], label="Joint 1 before")
-plot!(theta[1:end-1], torq_before_opt[2,:], label="Joint 2 before")
-plot!(theta[1:end-1], torq_after_opt[1,:], label="Joint 1 after")
-plot!(theta[1:end-1], torq_after_opt[2,:], label="Joint 2 after")
+# Вычисляем середины интервалов для моментов
+theta_mid = (theta[1:end-1] + theta[2:end]) / 2
+# Исключаем первый и последний интервалы
+theta_mid_inner = theta_mid[2:end-1]
+torq_before_inner = torq_before_opt[:, 2:end-1]  # строки: 1=joint1, 2=joint2
+torq_after_inner = torq_after_opt[:, 2:end-1]
+
+plot(theta_mid_inner, torq_before_inner[1,:], label="Joint 1 before")
+plot!(theta_mid_inner, torq_before_inner[2,:], label="Joint 2 before")
+plot!(theta_mid_inner, torq_after_inner[1,:], label="Joint 1 after")
+plot!(theta_mid_inner, torq_after_inner[2,:], label="Joint 2 after")
 xlabel!("θ")
 ylabel!("Torque")
 display(plot!())
+savefig("torque_comparison.png")
 
 # Compute time from optimized trajectory
 time_opt = zeros(N)
@@ -695,5 +705,6 @@ for i in 2:N
 end
 
 plot(time_opt, theta, xlabel="t (s)", ylabel="θ", label="θ(t)")
+savefig("theta_time.png")
 display(plot!())
 
