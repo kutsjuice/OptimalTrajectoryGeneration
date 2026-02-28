@@ -389,6 +389,10 @@ dd_th_d_t2_f = zeros(N); dd_th_d_t2_b = zeros(N);; dd_th_d_t2_a = zeros(N)
 t = zeros(N)
 torq_before_opt = zeros(2, N-1)   # 2 строки × (N-1) столбцов
 
+
+
+M = diagm(0 => [1.0, 1.0, 1.0, 1.0])
+h = zeros(4)
 for i in 2:N
     theta_cur     = 0.5 * (theta[i-1] + theta[i])
     d_th_dt_cur   = 0.5 * (vel_profile[i-1] + vel_profile[i])
@@ -415,8 +419,6 @@ for i in 2:N
         -(dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 + d_psi2_dth(theta_cur) * dd_th_d_t2_cur)/2
     ]
 
-    M = diagm(0 => [1.0, 1.0, 1.0, 1.0])
-    h = zeros(4)
 
     torq = M * ddq_cur + h
 
@@ -426,9 +428,10 @@ filename = "torq_before_opt_k=$(k).npz"
 npzwrite(filename, Dict("torq" => torq_before_opt, "theta" => theta))
 d_th_d_t_f = fill(1000.0, N)
 d_th_d_t_b = fill(1000.0, N)
-mask = (theta .> 0.05) .& (theta .< 0.95)
+mask = (theta[1:end-1] .> 0.05) .& (theta[1:end-1] .< 0.95)
 p = 0.75
-Tmax = fill( maximum(abs.(torq_before_opt[:, mask])) * p, 4 )
+Tmax_val = maximum(abs.(torq_before_opt[:, mask])) * p
+Tmax = fill(Tmax_val, 4)
 Tmax[end] = Inf
 th0  = 0.0
 dth0 = 0.0
@@ -447,13 +450,13 @@ dq0 = [
 # M, h = ComputeMassMatrixAndForceTerms(q0, dq0)
 
 # Начальные условия
-d_th_d_t_f[1] = 0.0;    t[0] = 0.0
+d_th_d_t_f[1] = 0.0;    t[1] = 0.0
 d_th_d_t_b[end] = 0.0
-d_psi__d_th = [
+d_psi_d_th = [
     0,
-    dd_psi1_dth2(th0),
-    dd_psi2_dth2(th0),
-    dd_psi3_dth2(th0)   
+    d_psi1_dth(th0),
+    d_psi2_dth(th0),
+    d_psi3_dth(th0)
 ]
 dd_psi_dth2 = [
     0,
@@ -461,12 +464,13 @@ dd_psi_dth2 = [
     dd_psi2_dth2(th0),
     dd_psi3_dth2(th0)
 ]
-a_buf  = M * dd_psi_d_th2
-v_buf = M * d_psi_dth
+a_buf  = M * dd_psi_dth2
+v_buf = M * d_psi_d_th
 th_buf = Inf
 buf = []
 for i in 1:4
-    th_i = sqrt(abs(Tmax[i] / (0.5v_buf[i]/ds + 0.25a_buf[i])))
+    local th_buf = Inf
+    th_i = sqrt(abs(Tmax[i] / (0.5 * v_buf[i] / ds + 0.25a_buf[i])))
     th_buf = min(th_buf, th_i)
 end
 d_th_d_t_f[2] = th_buf
@@ -487,13 +491,14 @@ a_buf  = M * d_psi_d_th2
 v_buf = M * d_psi_d_th
 th_buf = Inf
 for i in 1:4
+    local th_buf = Inf
     th_i = sqrt(abs(Tmax[i] / (0.5v_buf[i]/ds + 0.25a_buf[i])))
     th_buf = min(th_buf, th_i)
 end
 d_th_d_t_b[end-1] = th_buf
-dd_th_d_t2_f[0] = (d_th_d_t_f[2])/ds
+dd_th_d_t2_f[1] = (d_th_d_t_f[2])/ds
 dd_th_d_t2_b[end] = -(d_th_d_t_b[end-1])/ds
-for i in 2:N
+for i in 3:N
     # Forward pass
     theta_cur, d_th_dt_cur = theta[i-1], d_th_d_t_f[i-1]
     ddtheta_prev = dd_th_d_t2_f[i-1] - d_th_d_t_f[i-2]
@@ -522,23 +527,147 @@ for i in 2:N
     ddtheta_arr = zeros(3)
     ddtheta_arr[1] = Inf
     for j in 1:3
-        Ti = 0
-        if f1[j] < 0
-            Ti = - Tmax[j] - h[j]
-        elseif f1[j] > 0
-            Ti = Tmax[j] - h[j]
+        if abs(f1[j]) < 1e-12
+            ddtheta_arr[j] = Inf
+        elseif f1[j] < 0
+            Ti = -Tmax[j] - h[j]
+            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
         else
-            throw("Something wrong")
+            Ti = Tmax[j] - h[j]
+            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
         end
-
-        ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
     end
-    ddtheta = min(ddtheta_arr)
-    d_th_d_t_f[i] = min([vel_profile[i], d_th_dt_cur + ddtheta * ds])
-
+    ddtheta = minimum(ddtheta_arr)
+    d_th_d_t_f[i] = min(vel_profile[i], d_th_dt_cur + ddtheta * ds) 
     # Backward pass
-    theta_cur, d_th_dt_cur = theta[end-i], d_th_d_t_b[end-i]
+    theta_cur, d_th_dt_cur = theta[end-i+1], d_th_d_t_b[end-i+1]
     ddtheta_prev = dd_th_d_t2_b[end-i+1] - d_th_d_t_b[end-i+2]
     d_th_dt_half = d_th_dt_cur + 0.5 * ds * ddtheta_prev
-    
+
+    q_cur = [
+        0,
+        psi1(theta_cur - ds/2),
+        psi2(theta_cur - ds/2),
+        psi3(theta_cur - ds/2)
+    ]
+    dq0_cur = [
+        0,
+        d_psi1_dth(theta_cur - ds/2) * d_th_dt_half,
+        d_psi2_dth(theta_cur - ds/2) * d_th_dt_half,
+        d_psi3_dth(theta_cur - ds/2) * d_th_dt_half
+    ]
+    # M, h = ComputeMassMatrixAndForceTerms(q_cur, dq0_cur)
+    f1 = M * [
+        0,
+        d_psi1_dth(theta_cur - ds/2) * d_th_dt_half,
+        d_psi2_dth(theta_cur - ds/2) * d_th_dt_half,
+        d_psi3_dth(theta_cur - ds/2) * d_th_dt_half,
+    ]
+    f2 = M * [
+        0,
+        dd_psi1_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi2_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
+        dd_psi3_dth2(theta_cur - ds/2) * d_th_dt_half * d_th_dt_half,
+    ]
+    ddtheta_arr = zeros(3)
+    ddtheta_arr = fill(-Inf, 3)
+    for j in 1:3
+        if abs(f1[j]) < 1e-12
+            ddtheta_arr[j] = -Inf
+        elseif f1[j] < 0
+            Ti = -Tmax[j] - h[j]
+            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+        else
+            Ti = Tmax[j] - h[j]
+            ddtheta_arr[j] = (Ti - f2[j]) / f1[j]
+        end
+    end
+    ddtheta = maximum(ddtheta_arr)
+    d_th_d_t_new = min(vel_profile[end-i+1], d_th_dt_cur + ddtheta * ds)
+
+    d_th_d_t_b[end-i+1] = abs(d_th_d_t_new)
 end
+
+traj = min.(d_th_d_t_f, d_th_d_t_b)
+
+torq_after_opt = zeros(2, N-1)
+
+for i in 2:N
+    theta_cur   = 0.5 * (theta[i-1] + theta[i])
+    d_th_dt_cur = 0.5 * (traj[i-1] + traj[i])
+    dd_th_d_t2_cur = (traj[i] - traj[i-1]) / ds * d_th_dt_cur
+
+    q_cur = [
+        0.0,
+        psi1(theta_cur),
+        psi2(theta_cur),
+        psi3(theta_cur)
+    ]
+
+    dq_cur = [
+        0.0,
+        d_psi1_dth(theta_cur) * d_th_dt_cur,
+        d_psi2_dth(theta_cur) * d_th_dt_cur,
+        d_psi3_dth(theta_cur) * d_th_dt_cur
+    ]
+
+    ddq_cur = [
+        0.0,
+        dd_psi1_dth2(theta_cur) * d_th_dt_cur^2 +
+        d_psi1_dth(theta_cur)  * dd_th_d_t2_cur,
+
+        dd_psi2_dth2(theta_cur) * d_th_dt_cur^2 +
+        d_psi2_dth(theta_cur)  * dd_th_d_t2_cur,
+
+        dd_psi3_dth2(theta_cur) * d_th_dt_cur^2 +
+        d_psi3_dth(theta_cur)  * dd_th_d_t2_cur
+    ]
+
+    torq = M * ddq_cur + h
+    torq_after_opt[:, i-1] = torq[2:3]
+end
+
+npzwrite("velocity_prof_opt_k=$(k)_p=$(p).npz",
+         Dict("velocity_profile" => traj,
+              "theta" => theta))
+
+npzwrite("torq_after_opt_k=$(k)_p=$(p).npz",
+         Dict("torq" => torq_after_opt,
+              "theta" => theta))
+
+plot(theta, vel_profile, label="Velocity limit")
+plot!(theta, d_th_d_t_f, label="Forward")
+plot!(theta, d_th_d_t_b, label="Backward")
+plot!(theta, traj, label="Final trajectory")
+xlabel!("θ")
+ylabel!("θ̇")
+gr()
+
+plot(theta[1:end-1], torq_before_opt[1,:],
+     label="Joint 1 before")
+plot!(theta[1:end-1], torq_before_opt[2,:],
+     label="Joint 2 before")
+
+plot!(theta[1:end-1], torq_after_opt[1,:],
+     label="Joint 1 after")
+
+plot!(theta[1:end-1], torq_after_opt[2,:],
+     label="Joint 2 after")
+
+xlabel!("θ")
+ylabel!("Torque")
+gr()
+
+time = zeros(N)
+for i in 2:N
+    if traj[i] > 1e-10
+        time[i] = time[i-1] + ds / traj[i]
+    else
+        time[i] = time[i-1]
+    end
+end
+
+plot(time, theta,
+     xlabel="t (s)",
+     ylabel="θ",
+     label="θ(t)")
