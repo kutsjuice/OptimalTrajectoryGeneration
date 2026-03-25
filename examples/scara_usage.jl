@@ -319,7 +319,7 @@ d_th_d_t_b = fill(1000.0, N)
 
 # Determine torque limit from pre-optimization torques
 mask = (theta_vec[1:end-1] .> 0.05) .& (theta_vec[1:end-1] .< 0.95)
-p_frac = 0.75
+p_frac = 1
 Tmax_val = maximum(abs.(torq_before_opt[:, mask])) * p_frac
 Tmax = fill(Tmax_val, 4)
 Tmax[end] = Inf
