@@ -319,7 +319,7 @@ d_th_d_t_b = fill(1000.0, N)
 
 # Determine torque limit from pre-optimization torques
 mask = (theta_vec[1:end-1] .> 0.05) .& (theta_vec[1:end-1] .< 0.95)
-p_frac = 1
+p_frac = 0.75
 Tmax_val = maximum(abs.(torq_before_opt[:, mask])) * p_frac
 Tmax = fill(Tmax_val, 4)
 Tmax[end] = Inf
@@ -369,7 +369,9 @@ for i in 2:N-1
     v_cur = d_th_d_t_f[i]
     θ_mid = θ_cur + dθ/2
 
-    f1 = M * [0.0, d_psi1_dth(θ_mid)*v_cur, d_psi2_dth(θ_mid)*v_cur, d_psi3_dth(θ_mid)*v_cur]
+    # f2_paper = M·ψ_θ  (coefficient of θ̈)
+    # f1_paper·θ̇² = M·ψ_θθ·θ̇²  (velocity-dependent term)
+    f1 = M * [0.0, d_psi1_dth(θ_mid), d_psi2_dth(θ_mid), d_psi3_dth(θ_mid)]
     f2 = M * [0.0, dd_psi1_dth2(θ_mid)*v_cur^2, dd_psi2_dth2(θ_mid)*v_cur^2, dd_psi3_dth2(θ_mid)*v_cur^2]
 
     a_min = -Inf; a_max = Inf
@@ -407,7 +409,9 @@ for i in N-2:-1:2
     v_nxt = d_th_d_t_b[i+1]
     θ_mid = θ_cur + dθ/2
 
-    f1 = M * [0.0, d_psi1_dth(θ_mid)*v_nxt, d_psi2_dth(θ_mid)*v_nxt, d_psi3_dth(θ_mid)*v_nxt]
+    # f2_paper = M·ψ_θ  (coefficient of θ̈)
+    # f1_paper·θ̇² = M·ψ_θθ·θ̇²  (velocity-dependent term)
+    f1 = M * [0.0, d_psi1_dth(θ_mid), d_psi2_dth(θ_mid), d_psi3_dth(θ_mid)]
     f2 = M * [0.0, dd_psi1_dth2(θ_mid)*v_nxt^2, dd_psi2_dth2(θ_mid)*v_nxt^2, dd_psi3_dth2(θ_mid)*v_nxt^2]
 
     a_min = -Inf; a_max = Inf
