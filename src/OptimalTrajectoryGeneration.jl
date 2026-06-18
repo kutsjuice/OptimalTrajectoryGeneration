@@ -213,4 +213,11 @@ function generate_joint_trajectory(
 )::TrajectoryResult
     error("generate_joint_trajectory not implemented for robot type $(typeof(robot))")
 end
+function generate_joint_trajectory(
+    robot::T,
+    path_speed::Vector{Vector{Float64}},
+    time_step::Float64,
+)::TrajectoryResult where T<:AbstractRobotManipulator
+    inverse_kinematics(robot, )
+end
 end # module

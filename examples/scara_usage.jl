@@ -10,11 +10,25 @@ using NPZ
 # TestRobot будет наследовать от него после интеграции с пакетом.
 # using OptimalTrajectoryGeneration
 
+
+robot = EXUDYN.RObot()
+
+struct MyRobot <: AbstractRobot
+    robot::ExudynRobot
+end
+robot_connector = MyRobot(robot)
+function OptimalTragectoryGenerator.forward_kinematic(robot::MyRobot, q::AbstractVector)
+    return robot.fk(q)
+end
+
+generate_joint_trajectory(robot_connector, )
+fk()
 mutable struct TestRobot
     l1::Float64
     l2::Float64
     dof::Int
 end
+
 
 function forward_kinematics(robot::TestRobot, q::AbstractVector)
     q1 = q[1]
