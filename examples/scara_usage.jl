@@ -38,8 +38,14 @@ constraints_vel_only = TrajectoryConstraints(
     (fill(-Inf, robot.dof), fill(Inf, robot.dof))
 )
 result_vel = generate_joint_trajectory(robot, curve, q0, constraints_vel_only; n_points=N)
-# Tmax_val = maximum(abs.(result_vel.torques)) * p_frac
-Tmax_val = 250.0
+
+# Exclude the boundary region: the TOPP forward/backward pass forces
+# theta_dot = 0 at both path endpoints, which produces large but
+# physically irrelevant acceleration/torque spikes there. Mask them out
+# before estimating the torque limit, same as the original script did.
+theta_vel = range(0.0, 1.0, length=N)
+mask = (theta_vel .> 0.05) .& (theta_vel .< 0.95)
+Tmax_val = maximum(abs.(result_vel.torques[mask, :])) * p_frac
 
 constraints = TrajectoryConstraints(
     fill(w_max, robot.dof),                 # velocity_limits
@@ -68,10 +74,14 @@ end
 let
     fig = Figure()
     ax = Axis(fig[1, 1], xlabel="θ", ylabel="Torque", title="Joint torques along path")
+    lines!(ax, theta_vel, result_vel.torques[:, 1], label="Joint 1 (before opt)", color=(:blue, 0.35), linestyle=:dash)
+    lines!(ax, theta_vel, result_vel.torques[:, 2], label="Joint 2 (before opt)", color=(:red, 0.35), linestyle=:dash)
     lines!(ax, theta, result.torques[:, 1], label="Joint 1", color=:blue)
     lines!(ax, theta, result.torques[:, 2], label="Joint 2", color=:red)
     hlines!(ax, [Tmax_val, -Tmax_val], color=:black, linestyle=:dot, label="±Tmax")
     axislegend(ax, position=:lt)
+    y_pad = 0.1 * maximum(abs.(result.torques))
+    ylims!(ax, -maximum(abs.(result.torques)) - y_pad, maximum(abs.(result.torques)) + y_pad)
     display(fig)
     save("torque_comparison.png", fig)
 end
