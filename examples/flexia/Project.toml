@@ -1,0 +1,6 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Flexia = "2666d27d-cdb3-457d-8dda-c8ec34a93f6f"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+OptimalTrajectoryGeneration = "fea8e896-a1ec-43ab-b3f1-27ee766c5235"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
