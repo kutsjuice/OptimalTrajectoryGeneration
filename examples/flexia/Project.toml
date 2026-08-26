@@ -1,5 +1,6 @@
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Dierckx = "39dd38d3-220a-591b-8e3c-4c3a8c710a94"
 Flexia = "2666d27d-cdb3-457d-8dda-c8ec34a93f6f"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"

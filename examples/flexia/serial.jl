@@ -12,7 +12,6 @@ end
 
 njoints(chain::SerialChain) = length(chain.links)
 
-
 function build_serial_chain(lengths::Vector{Float64}, masses::Vector{Float64},
                             inertias::Vector{Float64};
                             joint_types::Vector{Symbol} = fill(:revolute, length(lengths)),
@@ -77,14 +76,4 @@ function build_serial_chain(lengths::Vector{Float64}, masses::Vector{Float64},
 
     auto_assemble && assemble!(sys)
     return SerialChain(sys, ground, links, joints, motors, Vector{Symbol}(joint_types), base_sv)
-end
-
-
-function position_rows(chain::SerialChain)
-    bodies = []
-    append!(bodies, chain.ground)
-    append!(bodies, chain.links)
-    for body in bodies
-        
-    end
 end
